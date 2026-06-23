@@ -603,11 +603,14 @@ def analyze_with_gemini(img_or_imgs, api_key, mode, student_name, student_id, is
         response = model.generate_content(contents)
         result_text = response.text
         
-     result_text = result_text.replace("```latex\n", "").replace("```math\n", "").replace("```\n", "").replace("```", "")
+        result_text = result_text.replace("```latex\n", "").replace("```math\n", "").replace("```\n", "").replace("```", "")
         result_text = result_text.replace("`$$", "$$").replace("$$`", "$$").replace("`$", "$").replace("$`", "$")
         import re
         result_text = re.sub(r'`([^`\n]+)`', r'\1', result_text)
         
+        leveled_up = False
+        if is_correction_mode:
+            leveled_up = update_student_exp(student_id, 50)
         leveled_up = False
         if is_correction_mode:
             leveled_up = update_student_exp(student_id, 50)
