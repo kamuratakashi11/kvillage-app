@@ -97,12 +97,12 @@ def set_custom_design():
     .stButton > button:hover {{ border-color: #ff4b4b !important; color: #ff4b4b !important; }}
     .stTextInput > div > div > input {{ color: #ffffff !important; background-color: rgba(0, 0, 0, 0.5) !important; }}
 
+   /* 不要なメニュー（右上のボタン等）のみを非表示にする */
     #MainMenu {{visibility: hidden;}}
-    header {{visibility: hidden !important;}}
-    [data-testid="stHeader"] {{display: none !important;}}
     [data-testid="stToolbar"] {{display: none !important;}}
     .stDeployButton {{display: none !important;}}
     footer {{visibility: hidden;}}
+    header {{background-color: transparent !important;}}
     div[data-testid="stDecoration"] {{display: none !important;}}
     div[class^="viewerBadge_"] {{display: none !important;}}
     div[class^="styles_viewerBadge"] {{display: none !important;}}
