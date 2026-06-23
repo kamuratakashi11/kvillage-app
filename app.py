@@ -89,13 +89,55 @@ def set_custom_design():
         background: rgba(20, 20, 20, 0.85);
         border-radius: 15px;
         padding: 2rem 3rem;
-        box-shadow: 0 8px 32px 0 rgba(178, 16, 16, 0.3); /* ナインボールの赤い影 */
+        box-shadow: 0 8px 32px 0 rgba(178, 16, 16, 0.3);
         backdrop-filter: blur(10px);
         -webkit-backdrop-filter: blur(10px);
         border: 1px solid rgba(178, 16, 16, 0.2);
         margin-top: 2rem;
         margin-bottom: 2rem;
     }}
+    
+    /* ----------------------------------------------------
+       ここから文字色を強制的に白（明るい色）にするCSS
+    ---------------------------------------------------- */
+    html, body, [class*="css"] {{
+        color: #ffffff !important;
+    }}
+    p, h1, h2, h3, h4, h5, h6, span, div, label, li {{
+        color: #f0f0f0 !important;
+    }}
+    a {{
+        color: #ff4b4b !important;
+    }}
+    .stButton > button {{
+        color: #ffffff !important;
+        background-color: #333333 !important;
+        border-color: #555555 !important;
+    }}
+    .stButton > button:hover {{
+        border-color: #ff4b4b !important;
+        color: #ff4b4b !important;
+    }}
+    .stTextInput > div > div > input {{
+        color: #ffffff !important;
+        background-color: rgba(0, 0, 0, 0.5) !important;
+    }}
+
+    /* -------------------------------------------------------------------
+       【追加】不要なメニュー（右上のForkボタンや右下のアプリ一覧）を非表示にする
+       ------------------------------------------------------------------- */
+    #MainMenu {{visibility: hidden;}}
+    header {{visibility: hidden !important;}}
+    [data-testid="stHeader"] {{display: none !important;}}
+    [data-testid="stToolbar"] {{display: none !important;}}
+    .stDeployButton {{display: none !important;}}
+    footer {{visibility: hidden;}}
+    
+    div[data-testid="stDecoration"] {{display: none !important;}}
+    div[class^="viewerBadge_"] {{display: none !important;}}
+    div[class^="styles_viewerBadge"] {{display: none !important;}}
+    #viewerBadge_link__1SllNM {{display: none !important;}}
+    .viewerBadge_container__1JCIV {{display: none !important;}}
     
     /* 画像のフルスクリーンボタンを隠す（あらゆる環境・言語に対応した最強のセレクタ） */
     button[title="View fullscreen"], 
