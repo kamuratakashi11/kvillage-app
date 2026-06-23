@@ -193,6 +193,38 @@ def set_custom_design():
         background-color: rgba(15, 15, 15, 0.95);
         border-right: 1px solid rgba(178, 16, 16, 0.2);
     }}
+
+    /* -------------------------------------------------------------------
+       【追加】印刷時のスタイル（文字消滅の防止とレイアウト最適化）
+       ------------------------------------------------------------------- */
+    @media print {{
+        /* 背景画像や特殊な背景色を強制解除し、真っ白にする */
+        .stApp, .block-container {{
+            background: #ffffff !important;
+            background-image: none !important;
+            box-shadow: none !important;
+            border: none !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }}
+        
+        /* 印刷時は文字色を強制的にすべて「黒」にする */
+        html, body, [class*="css"], p, h1, h2, h3, h4, h5, h6, span, div, label, li {{
+            color: #000000 !important;
+            text-shadow: none !important;
+        }}
+        
+        /* サイドバー、ボタン、入力フォームなど印刷に不要なUIを隠す */
+        [data-testid="stSidebar"], header, footer, .stButton, .stTextInput, .stSelectbox {{
+            display: none !important;
+        }}
+        
+        /* 印刷用の余白最適化 */
+        .block-container {{
+            padding: 0 !important;
+            margin: 0 !important;
+        }}
+    }}
     </style>
     """
     st.markdown(custom_css, unsafe_allow_html=True)
@@ -846,7 +878,7 @@ def main():
             current_item = target_items[st.session_state["tagging_index"]]
             
             # 問題の情報を表示
-            st.markdown(f"**大学**: {current_item.get('university')}　**ファイル**: {current_item.get('source_pdf')}　**ページ**: {current_item.get('page')}")
+            st.markdown(f"**大学**: {current_item.get('university')} **ファイル**: {current_item.get('source_pdf')} **ページ**: {current_item.get('page')}")
             
             # 画像の表示
             img_path = os.path.join(IMG_DIR, current_item.get("image_file", ""))
@@ -1070,14 +1102,14 @@ def main():
             AIのKvillage先生に正しく添削してもらうためには、**文字の大きさと写真の撮り方**がとても重要です！
             
             **✅ 推奨する書き方と撮り方（OK例）**
-            *   **文字の大きさ**: 普通のノートの「1行」に1文字をしっかり書く普通のサイズ（小さすぎる文字は読めません！）
-            *   **余白を取る**: 数式と数式の間は少し空白を空ける
-            *   **1枚の目安**: ノート1ページ分を、スマホ画面いっぱいに大きく撮影する
+            * **文字の大きさ**: 普通のノートの「1行」に1文字をしっかり書く普通のサイズ（小さすぎる文字は読めません！）
+            * **余白を取る**: 数式と数式の間は少し空白を空ける
+            * **1枚の目安**: ノート1ページ分を、スマホ画面いっぱいに大きく撮影する
             
             **❌ 避けてほしい書き方（NG例）**
-            *   **見開き撮影**: ノートの右と左を「1枚の写真」に収めようと遠くから撮影したもの（文字が小さすぎて読めません）
-            *   **ミミズ字**: 余白に小さく詰め込んだ計算メモ
-            *   **影やブレ**: スマホの影で真っ暗になっていたり、ピンボケしている写真
+            * **見開き撮影**: ノートの右と左を「1枚の写真」に収めようと遠くから撮影したもの（文字が小さすぎて読めません）
+            * **ミミズ字**: 余白に小さく詰め込んだ計算メモ
+            * **影やブレ**: スマホの影で真っ暗になっていたり、ピンボケしている写真
             
             👉 **「スマホの画面上で拡大せずに読める文字」** を意識して撮影してください！
             """)
@@ -1114,17 +1146,26 @@ def main():
                     st.subheader("📦 まとめて一括送信")
                     st.write("すべての画像を1回の送信としてまとめてAIに添削してもらいます。（※チケット消費量が通常の +1 枚になります）")
                     
+                    # --- 📦 まとめて一括送信の修正 ---
                     required_tickets = 1 if "添削" in mode else 0
                     required_tickets += 1
+                    
+                    # 画像が変わったらリセットされるようにファイル名をキーにする
+                    state_key_batch = f"batch_result_{uploaded_file.name}"
                     
                     if st.button(f"すべてのページをまとめて送信する（チケット {required_tickets}枚 消費）", type="primary", use_container_width=True):
                         with st.spinner(f"Kvillage先生が全 {len(images)} ページをまとめて確認中です...（約20〜40秒かかります）"):
                             result_text = analyze_with_gemini(images, api_key, mode, student_name, student_id, is_batch=True)
-                            st.subheader("👨‍🏫 Kvillage先生からの返信 (全ページまとめ)")
-                            st.markdown(result_text)
+                            # 生成結果をセッションステート（メモリ）に保存する
+                            st.session_state[state_key_batch] = result_text
                             
-                            safe_text = html.escape(result_text)
-                            html_template = f"""<!DOCTYPE html>
+                    if state_key_batch in st.session_state:
+                        result_text = st.session_state[state_key_batch]
+                        st.subheader("👨‍🏫 Kvillage先生からの返信 (全ページまとめ)")
+                        st.markdown(result_text)
+                        
+                        safe_text = html.escape(result_text)
+                        html_template = f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
@@ -1157,14 +1198,14 @@ def main():
     </script>
 </body>
 </html>"""
-                            st.download_button(
-                                label="📥 このまとめ解説を専用Webページとして保存",
-                                data=html_template,
-                                file_name=f"{student_name}さん_Kvillage先生の解説_まとめ.html",
-                                mime="text/html",
-                                key="dl_btn_batch",
-                                type="secondary"
-                            )
+                        st.download_button(
+                            label="📥 このまとめ解説を専用Webページとして保存",
+                            data=html_template,
+                            file_name=f"{student_name}さん_Kvillage先生の解説_まとめ.html",
+                            mime="text/html",
+                            key="dl_btn_batch",
+                            type="secondary"
+                        )
                     
                     st.markdown("---")
                     st.subheader("📄 個別送信（1ページずつ送る場合）")
@@ -1191,17 +1232,26 @@ def main():
                             st.markdown(f'<img src="data:image/png;base64,{img_str}" style="width:100%; border-radius:8px; border:1px solid rgba(255,255,255,0.2);">', unsafe_allow_html=True)
                             st.caption(tab_names[i])
                         
-                        # タブごとに独立した送信ボタンを配置（キーで一意にする）
+                        # --- 📄 個別送信の修正 ---
                         btn_label = "このページをKvillage先生に送信する" if len(images) > 1 else "Kvillage先生に送信する"
+                        
+                        # ページ番号とファイル名を組み合わせた専用のキーを作る
+                        state_key_indiv = f"indiv_result_{uploaded_file.name}_{i}"
+                        
                         if st.button(btn_label, key=f"btn_analyze_{i}", type="primary"):
                             with st.spinner(f"Kvillage先生が {tab_names[i]} を確認中です...（約10〜30秒かかります）"):
                                 result_text = analyze_with_gemini(images[i], api_key, mode, student_name, student_id)
-                                st.subheader(f"👨‍🏫 Kvillage先生からの返信 ({tab_names[i]})")
-                                st.markdown(result_text)
-                                
-                                # --- HTMLファイルとしてのダウンロード機能 ---
-                                safe_text = html.escape(result_text)
-                                html_template = f"""<!DOCTYPE html>
+                                # 生成結果をセッションステート（メモリ）に保存する
+                                st.session_state[state_key_indiv] = result_text
+
+                        if state_key_indiv in st.session_state:
+                            result_text = st.session_state[state_key_indiv]
+                            st.subheader(f"👨‍🏫 Kvillage先生からの返信 ({tab_names[i]})")
+                            st.markdown(result_text)
+                            
+                            # --- HTMLファイルとしてのダウンロード機能 ---
+                            safe_text = html.escape(result_text)
+                            html_template = f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
@@ -1246,14 +1296,14 @@ def main():
 </body>
 </html>"""
                                 
-                                st.download_button(
-                                    label="📥 この解説を専用Webページ（印刷用）として保存",
-                                    data=html_template,
-                                    file_name=f"{student_name}さん_Kvillage先生の解説_{tab_names[i]}.html",
-                                    mime="text/html",
-                                    key=f"dl_btn_{i}",
-                                    type="secondary"
-                                )
+                            st.download_button(
+                                label="📥 この解説を専用Webページ（印刷用）として保存",
+                                data=html_template,
+                                file_name=f"{student_name}さん_Kvillage先生の解説_{tab_names[i]}.html",
+                                mime="text/html",
+                                key=f"dl_btn_{i}",
+                                type="secondary"
+                            )
 
 if __name__ == "__main__":
     main()
