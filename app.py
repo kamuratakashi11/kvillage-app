@@ -246,7 +246,7 @@ def load_json(path, default_val):
         else:
             return default_val
     except Exception as e:
-        print(f"DB読み込みエラー ({doc_name}): {e}")
+        st.error(f"🚨 **DB読み込みエラー ({doc_name})**: {e}")
         return default_val
 
 def save_json(path, data):
@@ -265,7 +265,7 @@ def save_json(path, data):
         doc_ref = db_client.collection("kvillage_data").document(doc_name)
         doc_ref.set({"data": data})
     except Exception as e:
-        print(f"DB保存エラー ({doc_name}): {e}")
+        st.error(f"🚨 **DB保存エラー ({doc_name})**: {e}")
 
 def init_student_data(student_id, name):
     data = load_json(STUDENTS_DATA_PATH, {})
@@ -900,6 +900,40 @@ def main():
                         save_json(HISTORY_PATH, history_db)
                         
                     st.success(f"{name}さんのパスワードを「{new_pwd}」に変更し、学習履歴も引き継ぎました！")
+                    st.rerun()
+            
+            # --- 💡【追加】生徒アカウントの削除 ---
+            st.markdown("---")
+            st.subheader("🗑️ 生徒アカウントの削除")
+            st.write("卒業した生徒や、間違って登録した生徒のデータをすべて削除します。（※一度消すと復元できません）")
+            
+            delete_target_pwd = st.selectbox("削除する生徒を選択", options=list(users.keys()), format_func=lambda x: f"{users[x]} (現在のパスワード: {x})", key="del_select")
+            
+            # 誤操作防止のための確認チェックボックス
+            confirm_delete = st.checkbox("本当に削除してもよろしいですか？", key="del_check")
+            
+            if st.button("🚫 この生徒を完全に削除する", type="primary"):
+                if not confirm_delete:
+                    st.error("削除する場合は「本当に削除してもよろしいですか？」にチェックを入れてください。")
+                else:
+                    name = users[delete_target_pwd]
+                    
+                    # 1. usersから削除
+                    del users[delete_target_pwd]
+                    save_json(USERS_PATH, users)
+                    
+                    # 2. historyから削除
+                    if delete_target_pwd in history_db:
+                        del history_db[delete_target_pwd]
+                        save_json(HISTORY_PATH, history_db)
+                        
+                    # 3. students_dataから削除
+                    students_data = load_json(STUDENTS_DATA_PATH, {})
+                    if delete_target_pwd in students_data:
+                        del students_data[delete_target_pwd]
+                        save_json(STUDENTS_DATA_PATH, students_data)
+                        
+                    st.success(f"「{name}」さんのアカウントとすべてのデータを完全に削除しました。")
                     st.rerun()
 
     elif page == "🏷️ 問題のタグ付け作業":
