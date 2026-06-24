@@ -459,16 +459,33 @@ def convert_pdf_to_image(uploaded_file):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_flash_model_name(api_key):
+    """APIキーに紐づく利用可能なFlashモデルから、最も安価なLiteモデルを優先して取得する"""
     try:
         genai.configure(api_key=api_key)
         models = [m for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # 優先順位1：最新の最安モデル「2.5-flash-lite」があれば使う
+        for m in models:
+            if 'gemini-2.5-flash-lite' in m.name:
+                return m.name
+                
+        # 優先順位2：次点で安い「2.0-flash-lite」があれば使う
+        for m in models:
+            if 'gemini-2.0-flash-lite' in m.name:
+                return m.name
+                
+        # 優先順位3：Liteがなければ通常の新しい「2.5-flash」を使う
+        for m in models:
+            if 'gemini-2.5-flash' in m.name:
+                return m.name
+                
+        # 優先順位4：従来の「1.5-flash」
         for m in models:
             if 'gemini-1.5-flash' in m.name:
                 return m.name
-        for m in models:
-            if 'flash' in m.name:
-                return m.name
-        return "gemini-1.5-flash-latest"
+                
+        # それでもなければフォールバック（保険）
+        return "gemini-2.5-flash-lite"
     except Exception:
         return "gemini-1.5-flash"
 
