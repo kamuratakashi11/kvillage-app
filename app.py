@@ -582,6 +582,45 @@ def get_flash_model_name(api_key):
     except Exception:
         return "gemini-1.5-flash"
 
+def auto_tag_problem_with_ai(image_path, api_key):
+    if not os.path.exists(image_path):
+        return []
+    
+    try:
+        genai.configure(api_key=api_key)
+        best_model_name = get_flash_model_name(api_key)
+        
+        model = genai.GenerativeModel(
+            model_name=best_model_name,
+            generation_config={"response_mime_type": "application/json"}
+        )
+        
+        prompt = """
+        この数学の入試問題の画像を見て、以下の分野リストの中から、この問題に当てはまるものをすべて選び、JSON形式の配列（文字列のリスト）として出力してください。
+        必ず以下のリストにある完全一致する文字列のみを使用し、その他の言葉は含めないでください。
+        
+        【分野リスト】
+        "確率", "ベクトル", "数列", "微分・積分", "図形と方程式", "複素数平面", "極座標", "整数", "数と式", "三角関数", "指数・対数", "二次関数", "図形の性質", "場合の数", "極限", "その他", "数学Ⅲ"
+        
+        出力例:
+        ["ベクトル", "数列"]
+        """
+        img = Image.open(image_path)
+        # APIのトークン削減と高速化のためリサイズ
+        img.thumbnail((1024, 1024))
+        
+        response = model.generate_content([prompt, img])
+        result = json.loads(response.text)
+        if isinstance(result, list):
+            # リストに含まれる無効な文字列を除外
+            valid_tags = ["確率", "ベクトル", "数列", "微分・積分", "図形と方程式", "複素数平面", "極座標", "整数", "数と式", "三角関数", "指数・対数", "二次関数", "図形の性質", "場合の数", "極限", "その他", "数学Ⅲ"]
+            filtered_result = [tag for tag in result if tag in valid_tags]
+            return filtered_result if filtered_result else ["未分類"]
+        return ["未分類"]
+    except Exception as e:
+        print(f"AI Tagging Error: {e}")
+        return ["未分類"]
+
 def analyze_with_gemini(img_or_imgs, api_key, mode, student_name, student_id, is_batch=False):
     images_for_hash = img_or_imgs if isinstance(img_or_imgs, list) else [img_or_imgs]
     
@@ -937,8 +976,51 @@ def main():
                     st.rerun()
 
     elif page == "🏷️ 問題のタグ付け作業":
-        st.title("🏷️ 問題のタグ付け（手動分類）作業")
+        st.title("🏷️ 問題のタグ付け（手動＆AI分類）作業")
         st.write("自動分類で「未分類」となった問題や、分類を修正したい問題にタグを付けます。")
+        
+        # --- 💡【追加】AIによる自動一括分類 ---
+        st.markdown("---")
+        st.subheader("🤖 AIによる自動一括タグ付け")
+        st.write("有料版のGemini APIを使い、現在「未分類」となっている問題をすべて自動で判別しタグ付けします。（※1000問あたり約5.5円のコストがかかります）")
+        
+        unclassified_items = [item for item in db if "未分類" in item.get("topic", [])]
+        
+        if st.button(f"🚀 未分類の問題（残り {len(unclassified_items)} 問）をすべてAIで自動分類する", type="primary", disabled=len(unclassified_items) == 0):
+            gemini_key = st.secrets.get("GEMINI_API_KEY", "")
+            if not gemini_key:
+                st.error("APIキーが設定されていません。")
+            else:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                success_count = 0
+                total_to_process = len(unclassified_items)
+                
+                for idx, current_item in enumerate(unclassified_items):
+                    status_text.text(f"処理中 ({idx+1}/{total_to_process}): {current_item.get('university')} の問題をAIが確認中...")
+                    img_path = os.path.join(IMG_DIR, current_item.get("image_file", ""))
+                    
+                    new_tags = auto_tag_problem_with_ai(img_path, gemini_key)
+                    
+                    if new_tags and new_tags != ["未分類"]:
+                        # dbの該当アイテムを更新
+                        for db_idx, db_item in enumerate(db):
+                            if db_item.get("image_file") == current_item.get("image_file"):
+                                db[db_idx]["topic"] = new_tags
+                                success_count += 1
+                                break
+                                
+                    progress_bar.progress((idx + 1) / total_to_process)
+                    
+                # 全て終わったら保存
+                save_json(DB_PATH, db)
+                status_text.success(f"🎉 自動分類が完了しました！ ({success_count}問を新しく分類しました)")
+                st.toast("AIによる自動分類が完了しました！", icon="🤖")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("✍️ 個別での確認・修正")
         
         # セッションステートの初期化
         if "tagging_index" not in st.session_state:
@@ -987,6 +1069,24 @@ def main():
                 current_topics = [current_topics]
                 
             new_topics = st.multiselect("この問題の分野（複数選択可）", all_topics, default=current_topics)
+            
+            # --- 💡【追加】個別のAI自動判定ボタン ---
+            if st.button("🤖 AIに判定させて自動保存し、次へ進む", type="secondary"):
+                gemini_key = st.secrets.get("GEMINI_API_KEY", "")
+                with st.spinner("AIが画像から分野を判定中..."):
+                    suggested_tags = auto_tag_problem_with_ai(img_path, gemini_key)
+                    if suggested_tags and suggested_tags != ["未分類"]:
+                        # データベースを更新して次へ
+                        for idx, item in enumerate(db):
+                            if item.get("image_file") == current_item.get("image_file"):
+                                db[idx]["topic"] = suggested_tags
+                                break
+                        save_json(DB_PATH, db)
+                        st.session_state["tagging_index"] += 1
+                        st.toast(f"AI判定: {', '.join(suggested_tags)}", icon="🤖")
+                        st.rerun()
+                    else:
+                        st.error("AIによる判定ができませんでした（判定不能）。")
             
             col1, col2, col3 = st.columns([1, 1, 2])
             with col1:
