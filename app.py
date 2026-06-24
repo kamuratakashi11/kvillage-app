@@ -205,18 +205,24 @@ def set_custom_design():
 def init_firestore():
     try:
         if not firebase_admin._apps:
-            # Streamlit SecretsからFirebaseの鍵を読み込む
+            if "FIREBASE_KEY" not in st.secrets:
+                return None, "Secretsに [FIREBASE_KEY] が見つかりません。TOMLの形式を確認してください。"
+                
             cert_dict = dict(st.secrets["FIREBASE_KEY"])
+            if "private_key" not in cert_dict:
+                return None, "FIREBASE_KEY の中に private_key が見つかりません。"
+                
             # JSONからTOMLへの変換時の改行文字を元に戻す
-            cert_dict["private_key"] = cert_dict["private_key"].replace("\\n", "\n")
+            if "\\n" in cert_dict["private_key"]:
+                cert_dict["private_key"] = cert_dict["private_key"].replace("\\n", "\n")
+                
             cred = credentials.Certificate(cert_dict)
             firebase_admin.initialize_app(cred)
-        return firestore.client()
+        return firestore.client(), None
     except Exception as e:
-        print(f"Firestore初期化エラー: {e}")
-        return None
+        return None, f"Firestore初期化エラー: {e}"
 
-db_client = init_firestore()
+db_client, db_error = init_firestore()
 
 def load_json(path, default_val):
     # db.json（先生がアップロードする問題データ）はそのままローカルのファイルを読む
@@ -780,6 +786,9 @@ def analyze_with_gemini(img_or_imgs, api_key, mode, student_name, student_id, is
 
 def main():
     set_custom_design()
+    
+    if db_error:
+        st.error(f"🚨 **データベース接続エラー**\n\nデータベース（Firestore）に正しく接続できていません。以下のエラーメッセージをコピーして開発者にお知らせください。\n\n`{db_error}`")
     
     if not check_password_and_login():
         return
