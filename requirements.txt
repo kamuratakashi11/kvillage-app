@@ -1,0 +1,6 @@
+streamlit
+PyMuPDF
+google-generativeai
+Pillow
+reportlab
+firebase-admin
