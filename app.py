@@ -426,36 +426,43 @@ def check_password_and_login():
         # 新規登録
         with tab2:
             st.markdown("### 自分専用のアカウントを作ろう！")
-            st.info("💡 先生から教わった「教室の合言葉」が必要です。")
-            new_name = st.text_input("あなたの名前（ニックネーム可）", key="reg_name")
-            new_pass = st.text_input("好きなパスワード（6文字以上、英字と数字を必ず含めること）", type="password", key="reg_pass")
-            secret_word = st.text_input("教室の合言葉", type="password", key="reg_secret")
             
-            if st.button("登録してはじめる", key="btn_register"):
-                if not new_name or not new_pass or not secret_word:
-                    st.error("すべての項目を入力してください。")
-                elif secret_word != SECRET_WORD:
-                    st.error("合言葉が間違っています。先生に確認してください。")
-                elif len(new_pass) < 6:
-                    st.error("パスワードは6文字以上にしてください。")
-                elif not (re.search(r'[A-Za-z]', new_pass) and re.search(r'[0-9]', new_pass)):
-                    st.error("パスワードには、アルファベット（英字）と数字を両方とも含めてください。")
-                elif new_pass in users or new_pass == MASTER_PASSWORD:
-                    st.error("そのパスワードは既に使われています。別のパスワードを考えてね！")
-                else:
-                    # 登録処理
-                    users[new_pass] = new_name
-                    save_json(USERS_PATH, users)
-                    init_student_data(new_pass, new_name)
-                    st.success("登録が完了しました！さっそく始めましょう！")
-                    st.session_state["logged_in"] = True
-                    st.session_state["student_id"] = new_pass
-                    st.session_state["student_name"] = new_name
-                    st.session_state["is_guest"] = False
-                    st.session_state["is_master"] = False
-                    st.query_params.token = new_pass
-                    process_daily_login(new_pass)
-                    st.rerun()
+            # --- 💡【追加】新規登録の受付状態チェック ---
+            app_settings = load_json("app_settings.json", {"allow_registration": True})
+            
+            if not app_settings.get("allow_registration", True):
+                st.warning("🙏 **現在、新規会員登録は締め切っています。**\n\n登録に関するお問い合わせはKvillage先生に直接ご連絡ください。")
+            else:
+                st.info("💡 先生から教わった「教室の合言葉」が必要です。")
+                new_name = st.text_input("あなたの名前（ニックネーム可）", key="reg_name")
+                new_pass = st.text_input("好きなパスワード（6文字以上、英字と数字を必ず含めること）", type="password", key="reg_pass")
+                secret_word = st.text_input("教室の合言葉", type="password", key="reg_secret")
+                
+                if st.button("登録してはじめる", key="btn_register"):
+                    if not new_name or not new_pass or not secret_word:
+                        st.error("すべての項目を入力してください。")
+                    elif secret_word != SECRET_WORD:
+                        st.error("合言葉が間違っています。先生に確認してください。")
+                    elif len(new_pass) < 6:
+                        st.error("パスワードは6文字以上にしてください。")
+                    elif not (re.search(r'[A-Za-z]', new_pass) and re.search(r'[0-9]', new_pass)):
+                        st.error("パスワードには、アルファベット（英字）と数字を両方とも含めてください。")
+                    elif new_pass in users or new_pass == MASTER_PASSWORD:
+                        st.error("そのパスワードは既に使われています。別のパスワードを考えてね！")
+                    else:
+                        # 登録処理
+                        users[new_pass] = new_name
+                        save_json(USERS_PATH, users)
+                        init_student_data(new_pass, new_name)
+                        st.success("登録が完了しました！さっそく始めましょう！")
+                        st.session_state["logged_in"] = True
+                        st.session_state["student_id"] = new_pass
+                        st.session_state["student_name"] = new_name
+                        st.session_state["is_guest"] = False
+                        st.session_state["is_master"] = False
+                        st.query_params.token = new_pass
+                        process_daily_login(new_pass)
+                        st.rerun()
                 
         return False
     return True
@@ -821,6 +828,20 @@ def main():
     
     if page == "⚙️ 先生専用管理ダッシュボード":
         st.title("⚙️ Kvillage先生専用 管理ダッシュボード")
+        
+        # --- 💡【追加】システム設定（新規登録の受付切り替え） ---
+        st.subheader("⚙️ システム設定")
+        app_settings = load_json("app_settings.json", {"allow_registration": True})
+        
+        current_allow_reg = app_settings.get("allow_registration", True)
+        new_allow_reg = st.toggle("✨ 新規会員登録の受付を許可する", value=current_allow_reg)
+        
+        if new_allow_reg != current_allow_reg:
+            app_settings["allow_registration"] = new_allow_reg
+            save_json("app_settings.json", app_settings)
+            st.toast("システム設定を更新しました！", icon="✅")
+            st.rerun()
+            
         st.write("ここでは登録されている生徒のパスワードの確認、変更、学習状況の確認が行えます。")
         
         users = load_json(USERS_PATH, {})
