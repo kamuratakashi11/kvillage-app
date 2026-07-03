@@ -126,15 +126,7 @@ def set_custom_design():
         background-color: rgba(0, 0, 0, 0.5) !important;
     }}
 
-    /* -------------------------------------------------------------------
-       【追加】不要なメニュー（右上のForkボタンや右下のアプリ一覧）を非表示にする
-       ------------------------------------------------------------------- */
-    #MainMenu {{visibility: hidden;}}
-    header {{visibility: hidden !important;}}
-    [data-testid="stHeader"] {{display: none !important;}}
-    [data-testid="stToolbar"] {{display: none !important;}}
-    .stDeployButton {{display: none !important;}}
-    footer {{visibility: hidden;}}
+  
     
     div[data-testid="stDecoration"] {{display: none !important;}}
     div[class^="viewerBadge_"] {{display: none !important;}}
