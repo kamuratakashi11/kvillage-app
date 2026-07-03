@@ -127,18 +127,31 @@ def set_custom_design():
     }}
 
 /* -------------------------------------------------------------------
-       【修正版】不要なメニューのみ非表示（サイドバー開閉ボタンは維持）
+       【修正版】不要なメニューのみ非表示＆サイドバーボタンを白く強調
        ------------------------------------------------------------------- */
     #MainMenu {{visibility: hidden;}}
     [data-testid="stToolbar"] {{display: none !important;}}
     .stDeployButton {{display: none !important;}}
     footer {{visibility: hidden;}}
     
-    /* ヘッダー自体は残すが、背景を透明にしてデザインに馴染ませる */
+    /* ヘッダー自体は背景を透明にして残す */
     [data-testid="stHeader"] {{
         background-color: transparent !important;
     }}
-  
+
+    /* ▼▼ 追加：サイドバー開閉の「＞」ボタンを白くして最前面に表示 ▼▼ */
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapsedControl"] {{
+        display: flex !important;
+        visibility: visible !important;
+        z-index: 99999 !important; /* ガラス調パネルより手前に持ってくる */
+    }}
+    
+    [data-testid="collapsedControl"] svg,
+    [data-testid="stSidebarCollapsedControl"] svg {{
+        fill: #ffffff !important; /* アイコンを真っ白にする */
+        color: #ffffff !important;
+    }}
     
     div[data-testid="stDecoration"] {{display: none !important;}}
     div[class^="viewerBadge_"] {{display: none !important;}}
