@@ -126,6 +126,18 @@ def set_custom_design():
         background-color: rgba(0, 0, 0, 0.5) !important;
     }}
 
+/* -------------------------------------------------------------------
+       【修正版】不要なメニューのみ非表示（サイドバー開閉ボタンは維持）
+       ------------------------------------------------------------------- */
+    #MainMenu {{visibility: hidden;}}
+    [data-testid="stToolbar"] {{display: none !important;}}
+    .stDeployButton {{display: none !important;}}
+    footer {{visibility: hidden;}}
+    
+    /* ヘッダー自体は残すが、背景を透明にしてデザインに馴染ませる */
+    [data-testid="stHeader"] {{
+        background-color: transparent !important;
+    }}
   
     
     div[data-testid="stDecoration"] {{display: none !important;}}
