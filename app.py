@@ -127,31 +127,43 @@ def set_custom_design():
     }}
 
 /* -------------------------------------------------------------------
-       【修正版】不要なメニューのみ非表示＆サイドバーボタンを白く強調
+       【完全版】ヘッダーを透明にし、右側メニューだけを消して「＞」を最前面に
        ------------------------------------------------------------------- */
-    #MainMenu {{visibility: hidden;}}
-    [data-testid="stToolbar"] {{display: none !important;}}
-    .stDeployButton {{display: none !important;}}
-    footer {{visibility: hidden;}}
-    
-    /* ヘッダー自体は背景を透明にして残す */
-    [data-testid="stHeader"] {{
+    /* 1. ヘッダー自体は表示するが、背景と影を透明にし、最前面（パネルの上）に配置 */
+    header[data-testid="stHeader"], .stApp > header {
         background-color: transparent !important;
-    }}
+        background: transparent !important;
+        box-shadow: none !important;
+        visibility: visible !important;
+        display: block !important;
+        z-index: 99999 !important;
+    }
 
-    /* ▼▼ 追加：サイドバー開閉の「＞」ボタンを白くして最前面に表示 ▼▼ */
+    /* 2. 右上のメニューやDeployボタンが入っている大枠を完全に隠す */
+    [data-testid="stActionElements"] {
+        display: none !important;
+        visibility: hidden !important;
+    }
+
+    /* 3. 念のための個別非表示設定（フッター含む） */
+    [data-testid="stToolbar"], .stDeployButton, #MainMenu, footer {
+        display: none !important;
+    }
+
+    /* 4. 左上の「＞」ボタン（アコーディオン）を白文字で強調 */
     [data-testid="collapsedControl"],
-    [data-testid="stSidebarCollapsedControl"] {{
+    [data-testid="stSidebarCollapsedControl"] {
         display: flex !important;
         visibility: visible !important;
-        z-index: 99999 !important; /* ガラス調パネルより手前に持ってくる */
-    }}
+        opacity: 1 !important;
+    }
     
     [data-testid="collapsedControl"] svg,
-    [data-testid="stSidebarCollapsedControl"] svg {{
-        fill: #ffffff !important; /* アイコンを真っ白にする */
+    [data-testid="stSidebarCollapsedControl"] svg {
+        fill: #ffffff !important;
+        stroke: #ffffff !important;
         color: #ffffff !important;
-    }}
+    }
     
     div[data-testid="stDecoration"] {{display: none !important;}}
     div[class^="viewerBadge_"] {{display: none !important;}}
