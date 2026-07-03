@@ -15,7 +15,12 @@ from firebase_admin import credentials
 from firebase_admin import firestore
 
 # 共通設定 (Kvillage先生仕様)
-st.set_page_config(page_title="Kvillage先生の数学演習システム", page_icon="🎓", layout="wide")
+st.set_page_config(
+    page_title="Kvillage先生の数学演習システム", 
+    page_icon="🎓", 
+    layout="wide",
+    initial_sidebar_state="expanded"  # 追加：サイドバーを最初から開いた状態に固定
+)
 
 import zipfile
 import glob
@@ -126,7 +131,25 @@ def set_custom_design():
         background-color: rgba(0, 0, 0, 0.5) !important;
     }}
 
-
+/* -------------------------------------------------------------------
+       【修正】不要な上部メニューとサイドバー開閉機能を完全に非表示にする
+       ------------------------------------------------------------------- */
+    #MainMenu {{visibility: hidden;}}
+    header {{visibility: hidden !important;}}
+    [data-testid="stHeader"] {{display: none !important;}}
+    [data-testid="stToolbar"] {{display: none !important;}}
+    .stDeployButton {{display: none !important;}}
+    footer {{visibility: hidden;}}
+    
+    /* サイドバー開閉ボタン（「＞」や「✕」アイコン）を完全に消去 */
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stSidebarHeader"] button,
+    section[data-testid="stSidebar"] button[kind="header"] {{
+        display: none !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+    }}
     
     div[data-testid="stDecoration"] {{display: none !important;}}
     div[class^="viewerBadge_"] {{display: none !important;}}
