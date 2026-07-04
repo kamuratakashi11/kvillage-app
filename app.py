@@ -5,35 +5,31 @@ import random
 import fitz  # PyMuPDF
 from PIL import Image
 import google.generativeai as genai
-import tempfile
 from datetime import datetime, timedelta
 import re
-import html
-import hashlib
-import firebase_admin
-from firebase_admin import credentials
-from firebase_admin import firestore
+
+from storage import (
+    BASE_DIR, DB_PATH, IMG_DIR, USERS_PATH, HISTORY_PATH,
+    STUDENTS_DATA_PATH, BG_IMG_PATH, db_error, load_json, save_json,
+)
+from student_state import (
+    init_student_data, process_daily_login, get_level_info,
+)
+from image_utils import convert_pdf_to_image
+import gemini_service
+import rpg_data
+import rpg_ui
 
 # 共通設定 (Kvillage先生仕様)
 st.set_page_config(
-    page_title="Kvillage先生の数学演習システム", 
-    page_icon="🎓", 
+    page_title="Kvillage先生の数学演習システム",
+    page_icon="🎓",
     layout="wide",
     initial_sidebar_state="expanded"  # 追加：サイドバーを最初から開いた状態に固定
 )
 
 import zipfile
 import glob
-
-# パス設定
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "db.json")
-IMG_DIR = os.path.join(BASE_DIR, "pdf_images")
-USERS_PATH = os.path.join(BASE_DIR, "users.json")
-HISTORY_PATH = os.path.join(BASE_DIR, "history.json")
-STUDENTS_DATA_PATH = os.path.join(BASE_DIR, "students_data.json")
-ANSWER_CACHE_PATH = os.path.join(BASE_DIR, "answer_cache.json")
-BG_IMG_PATH = os.path.join(BASE_DIR, "bg.png")
 
 # クラウド用：分割ZIPがあれば解凍して画像を復元
 if not os.path.exists(IMG_DIR):
@@ -215,179 +211,6 @@ def set_custom_design():
     """
     st.markdown(custom_css, unsafe_allow_html=True)
 
-# --- 💡【追加】Firestoreデータベースの初期化 ---
-@st.cache_resource
-def init_firestore():
-    try:
-        if not firebase_admin._apps:
-            if "FIREBASE_KEY" not in st.secrets:
-                return None, "Secretsに [FIREBASE_KEY] が見つかりません。TOMLの形式を確認してください。"
-                
-            cert_dict = dict(st.secrets["FIREBASE_KEY"])
-            if "private_key" not in cert_dict:
-                return None, "FIREBASE_KEY の中に private_key が見つかりません。"
-                
-            # JSONからTOMLへの変換時の改行文字を元に戻す
-            if "\\n" in cert_dict["private_key"]:
-                cert_dict["private_key"] = cert_dict["private_key"].replace("\\n", "\n")
-                
-            cred = credentials.Certificate(cert_dict)
-            firebase_admin.initialize_app(cred)
-        return firestore.client(), None
-    except Exception as e:
-        return None, f"Firestore初期化エラー: {e}"
-
-db_client, db_error = init_firestore()
-
-def load_json(path, default_val):
-    # db.json（先生がアップロードする問題データ）はそのままローカルのファイルを読む
-    if path == DB_PATH:
-        if not os.path.exists(path):
-            return default_val
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-            
-    # それ以外の生徒データはFirestoreから読む
-    if db_client is None:
-        return default_val
-        
-    doc_name = os.path.basename(path).replace(".json", "")
-    try:
-        doc_ref = db_client.collection("kvillage_data").document(doc_name)
-        doc = doc_ref.get()
-        if doc.exists:
-            data = doc.to_dict()
-            return data.get("data", default_val)
-        else:
-            return default_val
-    except Exception as e:
-        st.error(f"🚨 **DB読み込みエラー ({doc_name})**: {e}")
-        return default_val
-
-def save_json(path, data):
-    # db.json はローカルに上書きする（※通常アプリ稼働中はタグ付け以外で書き換えない）
-    if path == DB_PATH:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-        return
-        
-    # 生徒データの書き込みはすべてFirestoreへ送る
-    if db_client is None:
-        return
-        
-    doc_name = os.path.basename(path).replace(".json", "")
-    try:
-        doc_ref = db_client.collection("kvillage_data").document(doc_name)
-        doc_ref.set({"data": data})
-    except Exception as e:
-        st.error(f"🚨 **DB保存エラー ({doc_name})**: {e}")
-
-def init_student_data(student_id, name):
-    data = load_json(STUDENTS_DATA_PATH, {})
-    if student_id not in data:
-        data[student_id] = {
-            "name": name,
-            "tickets": 3,
-            "exp": 0,
-            "level": 1,
-            "login_streak": 1,
-            "last_login_date": datetime.now().strftime("%Y-%m-%d")
-        }
-        save_json(STUDENTS_DATA_PATH, data)
-    return data[student_id]
-
-def process_daily_login(student_id):
-    if student_id == "master":
-        return
-    data = load_json(STUDENTS_DATA_PATH, {})
-    if student_id not in data:
-        # 古いアカウントなどでデータがない場合は初期化してボーナスを付与する
-        users = load_json(USERS_PATH, {})
-        name = users.get(student_id, "名無し")
-        data[student_id] = {
-            "name": name,
-            "tickets": 3,
-            "exp": 0,
-            "level": 1,
-            "login_streak": 1,
-            "last_login_date": datetime.now().strftime("%Y-%m-%d")
-        }
-        save_json(STUDENTS_DATA_PATH, data)
-        st.toast(f"🎉 ログインボーナス！チケットを3枚獲得しました！ (現在: 3枚)", icon="🎟️")
-        return
-    
-    student = data[student_id]
-    today = datetime.now().strftime("%Y-%m-%d")
-    last_login = student.get("last_login_date", "")
-    
-    if today != last_login:
-        student["tickets"] = min(10, student.get("tickets", 0) + 3)
-        try:
-            last_date = datetime.strptime(last_login, "%Y-%m-%d")
-            curr_date = datetime.strptime(today, "%Y-%m-%d")
-            if (curr_date - last_date).days == 1:
-                student["login_streak"] = student.get("login_streak", 0) + 1
-            else:
-                student["login_streak"] = 1
-        except:
-            student["login_streak"] = 1
-            
-        student["last_login_date"] = today
-        data[student_id] = student
-        save_json(STUDENTS_DATA_PATH, data)
-        st.toast(f"🎉 ログインボーナス！チケットを3枚獲得しました！ (現在: {student['tickets']}枚)", icon="🎟️")
-
-def get_level_info(total_exp):
-    """累計EXPから、現在のレベル、そのレベル内での獲得EXP、次のレベルへの必要EXPを計算する"""
-    level = 1
-    required_exp_for_next = 50
-    current_tier_exp = total_exp
-    
-    while current_tier_exp >= required_exp_for_next:
-        current_tier_exp -= required_exp_for_next
-        level += 1
-        required_exp_for_next += 50
-        
-    return level, current_tier_exp, required_exp_for_next
-
-def update_student_exp(student_id, exp_gain):
-    if student_id == "master":
-        return False
-    data = load_json(STUDENTS_DATA_PATH, {})
-    if student_id not in data:
-        return False
-    
-    student = data[student_id]
-    old_level, _, _ = get_level_info(student.get("exp", 0))
-    
-    student["exp"] = student.get("exp", 0) + exp_gain
-    
-    new_level, _, _ = get_level_info(student["exp"])
-    leveled_up = False
-    
-    if new_level > old_level:
-        student["level"] = new_level
-        leveled_up = True
-        
-    data[student_id] = student
-    save_json(STUDENTS_DATA_PATH, data)
-    return leveled_up
-
-def consume_tickets(student_id, amount):
-    if student_id == "master":
-        return True
-    data = load_json(STUDENTS_DATA_PATH, {})
-    if student_id not in data:
-        return False
-    
-    student = data[student_id]
-    if student.get("tickets", 0) >= amount:
-        student["tickets"] -= amount
-        data[student_id] = student
-        save_json(STUDENTS_DATA_PATH, data)
-        return True
-    return False
-
 def check_password_and_login():
     """3つの入り口（ログイン・新規登録・ゲスト）を持つ認証機能"""
     users = load_json(USERS_PATH, {})
@@ -542,68 +365,13 @@ def generate_pdf(selected_univs, num_questions, student_id, is_review=False, rev
     
     return pdf_data, count
 
-def convert_pdf_to_image(uploaded_file):
-    import tempfile
-    import os
-    
-    # PDFの中身がストリームだと正常に全ページ読み込めない場合があるため、一度一時ファイルに保存する
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(uploaded_file.getvalue())
-        tmp_path = tmp.name
-        
-    doc = None
-    try:
-        doc = fitz.open(tmp_path)
-        images = []
-        mat = fitz.Matrix(2.0, 2.0)
-        for i in range(len(doc)):
-            page = doc[i]
-            pix = page.get_pixmap(matrix=mat)
-            img_data = pix.tobytes("png")
-            img = Image.open(io.BytesIO(img_data)).convert("RGB")
-            # 一括送信時にデータ容量オーバー（Payload Too Large等）で弾かれるのを防ぐため画像サイズを圧縮
-            img.thumbnail((1500, 1500))
-            images.append(img)
-        return images
-    except Exception as e:
-        return []
-    finally:
-        # Windowsエラー対策: 削除する前に必ずファイルを閉じる
-        if doc is not None:
-            doc.close()
-        # 処理が終わったら確実に一時ファイルを削除
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_flash_model_name(api_key):
-    """APIキーに紐づく利用可能なFlashモデルの名前を1回だけ取得し、キャッシュする"""
-    try:
-        genai.configure(api_key=api_key)
-        models = [m for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
-        # まず gemini-1.5-flash が名前に含まれるものを探す
-        for m in models:
-            if 'gemini-1.5-flash' in m.name:
-                return m.name
-                
-        # なければ flash が含まれるものを探す
-        for m in models:
-            if 'flash' in m.name:
-                return m.name
-                
-        # それでもなければフォールバック
-        return "gemini-1.5-flash-latest"
-    except Exception:
-        return "gemini-1.5-flash"
-
 def auto_tag_problem_with_ai(image_path, api_key):
     if not os.path.exists(image_path):
         return []
-    
+
     try:
         genai.configure(api_key=api_key)
-        best_model_name = get_flash_model_name(api_key)
+        best_model_name = gemini_service.get_flash_model_name(api_key)
         
         model = genai.GenerativeModel(
             model_name=best_model_name,
@@ -636,208 +404,6 @@ def auto_tag_problem_with_ai(image_path, api_key):
         print(f"AI Tagging Error: {e}")
         return ["未分類"]
 
-def analyze_with_gemini(img_or_imgs, api_key, mode, student_name, student_id, is_batch=False):
-    images_for_hash = img_or_imgs if isinstance(img_or_imgs, list) else [img_or_imgs]
-    
-    # 画像ハッシュ化（キャッシュ用）
-    h = hashlib.md5()
-    for img in images_for_hash:
-        h.update(img.tobytes())
-    img_hash = h.hexdigest()
-
-    is_answer_mode = (mode == "解答・解説をもらう（答え合わせしたい時 / チケット消費0枚）")
-    is_hint_mode = (mode == "ヒントだけもらう（行き詰まった時 / チケット消費0枚）")
-    is_correction_mode = (mode == "添削してもらう（解き終わった時 / チケット消費1枚）")
-    
-    if is_answer_mode:
-        cache_data = load_json(ANSWER_CACHE_PATH, {})
-        if img_hash in cache_data:
-            greeting = f"**{student_name}さん、こんにちは！**\n\n"
-            return greeting + cache_data[img_hash] + "\n\n*(※データベースから一瞬で解答を取得しました！チケット消費0枚)*"
-
-    # チケット消費チェック
-    required_tickets = 1 if is_correction_mode else 0
-    if is_batch:
-        required_tickets += 1  # 一括送信のペナルティとして+1枚消費
-
-    if required_tickets > 0:
-        if not consume_tickets(student_id, required_tickets):
-            return f"⚠️ **チケットが足りません！**\n\n今回の送信にはチケットが {required_tickets}枚 必要です。明日ログインしてボーナスチケットを受け取ってください！"
-
-    genai.configure(api_key=api_key)
-    
-    # キャッシュされた関数から確実に存在するモデル名を取得（APIの無駄打ちは発生しない）
-    best_model_name = get_flash_model_name(api_key)
-    
-    try:
-        model = genai.GenerativeModel(best_model_name)
-    except Exception as e:
-        return f"モデルの初期化中にエラーが発生しました: {e}"
-    
-    if is_hint_mode:
-        instruction = "問題文と生徒の書き込みを読み取り、解き方の『最初のヒント』や『アプローチ方法』だけを教えてください。絶対に最終的な答えや完全な数式は教えないでください。"
-    elif is_answer_mode:
-        instruction = "問題文を読み取り、この問題に対する『完全な模範解答と丁寧な解説』を作成してください。\n【重要】今回は生徒が答え合わせを希望しているため、教育的な配慮（ヒントで止めるなど）は一切不要です。出し惜しみせず、最後の結論（答えの数値や証明の完了）まで全ての数式と論理展開を省略せずに最後まで書き切ってください。"
-    else:
-        instruction = "問題文と生徒の手書き解答の両方を読み取ってください。\n生徒の解答が合っているか判定し、間違っている場合は『どこで計算ミスをしたか』『どの公式を間違えたか』などを具体的に指摘して添削してください。\n白紙の場合は、「まずはここから考えてみよう」と優しくヒントを出してください。"
-
-    # 生徒のステータス取得
-    student_data = load_json(STUDENTS_DATA_PATH, {}).get(student_id, {})
-    level = student_data.get("level", 1)
-    streak = student_data.get("login_streak", 1)
-        
-    if is_answer_mode:
-        prompt = f"""
-あなたは優秀で、生徒に寄り添う親切な高校の数学教師「Kvillage先生」です。
-
-【生徒からの要望】
-{instruction}
-
-【ルール】
-1. 口調は「です・ます」調で、生徒を温かく励ますトーンにしてください。ただし、特定の生徒名や個別の挨拶は書かないでください。（システム側で後から付与します）
-2. 【重要】解答を教える際、ただ公式を当てはめるだけでなく、「なぜここでその公式を使うのか（発想の動機）」を必ず語ってください。
-3. 【超重要: 読みやすさとレイアウト（余白）】
-   相手は高校生です。文字や数式が密集していると読む気を無くしてしまいます。
-   - 文章は1〜2文ごとに必ず「空行（改行2回）」を挟み、たっぷりと余白を取ってください。
-   - 長い文章を絶対に1つの段落に詰め込まないでください。
-4. 【超重要: 数式の表示について（絶対に守ること）】
-   - シグマ記号（∑）、極限（lim）、積分（∫）、分数などを出力する際、**添え字や分母分子が必ず文字の「上下」に配置されるようにしてください**。
-   - 数式（特に方程式や式の変形）を書く際は、必ず改行して独立した行となる「ブロック数式（`$$` で囲む形式）」で記述してください。
-     (良い例): 「...を以下のように変形します。\n\n$$ a_n = \sum_{{k=1}}^n \frac{{1}}{{k}} $$\n\nこの式から...」
-   - 文中（インライン）に短い変数や数式（例: x や \alpha など）を書く場合は、バッククォート（`）ではなく、**必ず `$x$` や `$\alpha$` のように `$` で囲んでください**。
-   - インラインでシグマや分数など縦に長い数式を書く場合にのみ、`$ \displaystyle \sum $` のように `\displaystyle` を付けてください。単なる変数には不要です。
-   - 【厳禁】数式や変数を記述する際、絶対にバッククォート（`）で囲まないでください。緑色の文字（コードブロック）になってしまい、数式として表示されなくなります。
-5. 【超重要: 複数行の数式ブロックについて】
-   - 複数行の数式を書く場合は、**必ず `\begin{{aligned}}` と `\end{{aligned}}` を使用し、その外側を `$$` で囲んでください。**
-   - 絶対に `\begin{{align*}}` は使わないでください。（表示エラーになるため、必ず aligned を使用すること）
-   - 【厳格なルール】`\begin{{aligned}}` 環境内で等号（`&=`）を続ける場合は、**絶対に1行に複数書かず、必ず `\\` （バックスラッシュ2つ）を使って改行してください**。
-   - 例:
-     $$
-     \begin{{aligned}}
-     y &= x^2 + 2x + 1 \\
-       &= (x + 1)^2
-     \end{{aligned}}
-     $$
-"""
-    else:
-        prompt = f"""
-あなたは優秀で、生徒に寄り添う親切な高校の数学教師「Kvillage先生」です。
-目の前にいる生徒の名前は「{student_name}」さんです。
-
-【生徒の裏情報（※機械的に言わず、自然な励ましに変換して文中に含めること）】
-- 現在の数学レベル: {level}
-- 連続学習日数: {streak}日
-
-【生徒からの要望】
-{instruction}
-
-【ルール】
-1. 必ず最初に「{student_name}さん、こんにちは！」など、名前を呼んで温かく接し、生徒の学習の継続（{streak}日連続）やレベル（レベル{level}）を褒めてあげてください。
-2. 口調は「です・ます」調で、生徒を温かく励ますトーンにしてください。
-3. 【重要】解答を教える際、ただ公式を当てはめるだけでなく、「なぜここでその公式を使うのか（発想の動機）」を必ず語ってください。
-4. 【超重要: 読みやすさとレイアウト（余白）】
-   相手は高校生です。文字や数式が密集していると読む気を無くしてしまいます。
-   - 文章は1〜2文ごとに必ず「空行（改行2回）」を挟み、たっぷりと余白を取ってください。
-   - 長い文章を絶対に1つの段落に詰め込まないでください。
-5. 【超重要: 数式の表示について（絶対に守ること）】
-   - シグマ記号（∑）、極限（lim）、積分（∫）、分数などを出力する際、**添え字や分母分子が必ず文字の「上下」に配置されるようにしてください**。
-   - 数式（特に方程式や式の変形）を書く際は、必ず改行して独立した行となる「ブロック数式（`$$` で囲む形式）」で記述してください。
-     (良い例): 「...を以下のように変形します。\n\n$$ a_n = \sum_{{k=1}}^n \frac{{1}}{{k}} $$\n\nこの式から...」
-   - 文中（インライン）に短い変数や数式（例: x や \alpha など）を書く場合は、バッククォート（`）ではなく、**必ず `$x$` や `$\alpha$` のように `$` で囲んでください**。
-   - インラインでシグマや分数など縦に長い数式を書く場合にのみ、`$ \displaystyle \sum $` のように `\displaystyle` を付けてください。単なる変数には不要です。
-   - 【厳禁】数式や変数を記述する際、絶対にバッククォート（`）で囲まないでください。緑色の文字（コードブロック）になってしまい、数式として表示されなくなります。
-5. 【超重要: 複数行の数式ブロックについて】
-   - 複数行の数式を書く場合は、**必ず `\begin{{aligned}}` と `\end{{aligned}}` を使用し、その外側を `$$` で囲んでください。**
-   - 絶対に `\begin{{align*}}` は使わないでください。（表示エラーになるため、必ず aligned を使用すること）
-   - 【厳格なルール】`\begin{{aligned}}` 環境内で等号（`&=`）を続ける場合は、**絶対に1行に複数書かず、必ず `\\` （バックスラッシュ2つ）を使って改行してください**。
-   - 例:
-     $$
-     \begin{{aligned}}
-     y &= x^2 + 2x + 1 \\
-       &= (x + 1)^2
-     \end{{aligned}}
-     $$
-"""
-    try:
-        contents = [prompt]
-        # 複数画像の場合は縦長に連結して「1枚の画像」として送ることで、画像の枚数制限によるAPIエラーを回避する
-        if isinstance(img_or_imgs, list) and len(img_or_imgs) > 0:
-            if len(img_or_imgs) == 1:
-                contents.append(img_or_imgs[0])
-            else:
-                # 幅は最大のもの、高さは合計
-                widths, heights = zip(*(i.size for i in img_or_imgs))
-                max_width = max(widths)
-                total_height = sum(heights)
-                
-                # 縦長の空キャンバスを作成
-                new_im = Image.new('RGB', (max_width, total_height), (255, 255, 255))
-                y_offset = 0
-                for im in img_or_imgs:
-                    new_im.paste(im, (0, y_offset))
-                    y_offset += im.size[1]
-                
-                # 巨大すぎる場合はリサイズ（高さ最大4000px程度に制限）
-                if new_im.height > 4000:
-                    ratio = 4000.0 / new_im.height
-                    new_width = int(new_im.width * ratio)
-                    new_height = int(new_im.height * ratio)
-                    new_im = new_im.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                
-                contents.append(new_im)
-        elif not isinstance(img_or_imgs, list):
-            contents.append(img_or_imgs)
-            
-        response = model.generate_content(contents)
-        
-        result_text = response.text
-        
-        # AIが癖で出力してしまうMarkdownのコードブロックタグを削除（これがあると数式としてレンダリングされないため）
-        result_text = result_text.replace("```latex\n", "").replace("```math\n", "").replace("```\n", "").replace("```", "")
-        result_text = result_text.replace("`$$", "$$").replace("$$`", "$$").replace("`$", "$").replace("$`", "$")
-        
-        # さらに、インラインのバッククォート（緑文字の原因）を剥がす
-        # 例: `$(-2, 5)$` -> $(-2, 5)$ (この後Streamlitが$を認識して数式化する)
-        import re
-        result_text = re.sub(r'`([^`\n]+)`', r'\1', result_text)
-        # 成功時にEXP付与 (先生アカウント以外)
-        leveled_up = False
-        if is_correction_mode:
-            leveled_up = update_student_exp(student_id, 50)
-        elif is_hint_mode or is_answer_mode:
-            pass # チケット消費なしの行動ではEXPは増えない
-        
-        # キャッシュの保存と、解答モード時の挨拶の付与
-        if is_answer_mode:
-            cache_data = load_json(ANSWER_CACHE_PATH, {})
-            cache_data[img_hash] = result_text
-            save_json(ANSWER_CACHE_PATH, cache_data)
-            greeting = f"**{student_name}さん、こんにちは！**\n\n"
-            result_text = greeting + result_text
-        
-        if leveled_up:
-            st.toast(f"🎉 レベルアップしました！👑", icon="🎉")
-        
-        return result_text + f"\n\n*(使用モデル: {best_model_name})*"
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "429" in error_msg or "resource exhausted" in error_msg or "quota" in error_msg:
-            # 1日あたりの上限に達しているかチェック
-            if "generaterequestsperday" in error_msg or "perday" in error_msg or "limit: 200" in error_msg or "limit: 20" in error_msg:
-                return f"🙏 **本日のAI利用枠（1日あたりの上限回数）を使い切ってしまいました！**\n\n先生が設定した1日の上限回数に達したため、本日はこれ以上送信できません。明日の朝にリセットされるまでお待ちください。\n\n*(デバッグ用内部エラー: {e})*"
-            
-            # 待機秒数が含まれている場合は抽出する
-            wait_time = "1分ほど"
-            import re
-            match = re.search(r'retry in (\d+(?:\.\d+)?)s', error_msg)
-            if match:
-                seconds = int(float(match.group(1)))
-                wait_time = f"あと **{seconds}秒** ほど"
-                
-            return f"🙏 **現在Kvillage先生は他の生徒の質問に答えていて大忙しです！**\n\nごめんね、{wait_time}待ってからもう一度「Kvillage先生に送信する」ボタンを押してみてね！\n\n*(※通信制限のため一時的にお待ちいただいています)*"
-        else:
-            return f"エラーが発生しました: {e}"
-
 def main():
     set_custom_design()
     
@@ -867,29 +433,48 @@ def main():
         _, current_tier_exp, required_exp = get_level_info(exp)
         progress_val = min(1.0, max(0.0, current_tier_exp / required_exp))
         st.sidebar.progress(progress_val, text=f"次のレベルまで: {required_exp - current_tier_exp} EXP")
-        st.sidebar.markdown(f"**🎟️ 所持チケット**: {tickets} 枚")
+        st.sidebar.markdown(f"**🎟️ バトル挑戦チケット**: {tickets} 枚")
         st.sidebar.markdown(f"**🔥 連続学習**: {streak} 日目")
+        rpg_title = load_json(STUDENTS_DATA_PATH, {}).get(student_id, {}).get("title")
+        if rpg_title:
+            st.sidebar.markdown(f"**🏆 称号**: {rpg_title}")
         st.sidebar.markdown("---")
-    
+
     # 権限に応じたメニューの切り替え
     if is_master:
-        menu_options = ["⚙️ 先生専用管理ダッシュボード", "🏷️ 問題のタグ付け作業", "提出＆Kvillage先生の添削"]
+        menu_options = ["⚙️ 先生専用管理ダッシュボード", "🏷️ 問題のタグ付け作業", "🗺️ 数学冒険マップ", "提出＆Kvillage先生に質問する"]
     else:
-        menu_options = ["演習プリント作成", "復習プリント作成", "提出＆Kvillage先生の添削"]
-        
-    page = st.sidebar.radio("メニュー", menu_options)
-    
+        menu_options = ["演習プリント作成", "復習プリント作成", "🗺️ 数学冒険マップ", "提出＆Kvillage先生に質問する"]
+
+    # マップのフィールドリンク経由でページ全体が再読み込みされた場合、メニューの初期選択もマップに合わせる
+    default_menu_index = 0
+    if st.query_params.get("page") == "rpg_battle" and "🗺️ 数学冒険マップ" in menu_options:
+        default_menu_index = menu_options.index("🗺️ 数学冒険マップ")
+
+    page = st.sidebar.radio("メニュー", menu_options, index=default_menu_index)
+
     # ログアウトボタン
     if st.sidebar.button("ログアウト"):
         st.session_state.clear()
         st.query_params.clear()
         st.rerun()
-    
+
     db = load_json(DB_PATH, [])
     history_db = load_json(HISTORY_PATH, {})
     student_history = history_db.get(student_id, [])
-    
-    if page == "⚙️ 先生専用管理ダッシュボード":
+
+    rpg_field_from_url = st.query_params.get("field") if st.query_params.get("page") == "rpg_battle" else None
+
+    if rpg_field_from_url:
+        # マップ上のフィールドをクリックして遷移してきた場合は、サイドバーの選択に関わらずバトル画面を直接表示する
+        try:
+            rpg_api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        except Exception:
+            rpg_api_key = os.environ.get("GEMINI_API_KEY")
+        if not rpg_api_key or rpg_api_key == "ここにコピーしたAPIキーを貼り付けます":
+            rpg_api_key = None
+        rpg_ui.render_battle(rpg_field_from_url, student_id, student_name, rpg_api_key)
+    elif page == "⚙️ 先生専用管理ダッシュボード":
         st.title("⚙️ Kvillage先生専用 管理ダッシュボード")
         
         # --- 💡【追加】システム設定（新規登録の受付切り替え） ---
@@ -1286,223 +871,69 @@ def main():
                                 else:
                                     st.error("プリントの作成に失敗しました。")
                         
-    elif page == "提出＆Kvillage先生の添削":
-        st.title("📝 解答提出 ＆ Kvillage先生の添削アシスタント")
-        st.write("解き終わったプリント（書き込み済みのもの）を写真かPDFでアップロードしよう。Kvillage先生がチェックしてくれるよ！")
-        
-        try:
-            api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
-        except:
-            api_key = os.environ.get("GEMINI_API_KEY")
-            
-        if not api_key or api_key == "ここにコピーしたAPIキーを貼り付けます":
-            st.error("システムエラー: 裏側のAI設定（APIキー）が完了していません。Kvillage先生に報告してください。")
-            
-        with st.expander("📸 【重要】Kvillage先生に正しく見てもらうための写真の撮り方", expanded=True):
+    elif page == "🗺️ 数学冒険マップ":
+        rpg_ui.render_map(student_id, student_name)
+
+    elif page == "提出＆Kvillage先生に質問する":
+        st.title("📝 解答提出 ＆ Kvillage先生に質問しよう")
+        st.write("解き終わったプリント（書き込み済みのもの）の写真かPDFをアップロードすると、Geminiにそのまま貼り付けて使える専用プロンプトを作成します。自分のGeminiアプリに貼り付ければ、会話を続けながら気になることを何度でも質問できます！")
+
+        with st.expander("📸 【重要】Geminiに正しく読み取ってもらうための写真の撮り方", expanded=True):
             st.markdown("""
-            AIのKvillage先生に正しく添削してもらうためには、**文字の大きさと写真の撮り方**がとても重要です！
-            
+            AIに正しく読み取ってもらうためには、**文字の大きさと写真の撮り方**がとても重要です！
+
             **✅ 推奨する書き方と撮り方（OK例）**
             *   **文字の大きさ**: 普通のノートの「1行」に1文字をしっかり書く普通のサイズ（小さすぎる文字は読めません！）
             *   **余白を取る**: 数式と数式の間は少し空白を空ける
             *   **1枚の目安**: ノート1ページ分を、スマホ画面いっぱいに大きく撮影する
-            
+
             **❌ 避けてほしい書き方（NG例）**
             *   **見開き撮影**: ノートの右と左を「1枚の写真」に収めようと遠くから撮影したもの（文字が小さすぎて読めません）
             *   **ミミズ字**: 余白に小さく詰め込んだ計算メモ
             *   **影やブレ**: スマホの影で真っ暗になっていたり、ピンボケしている写真
-            
+
             👉 **「スマホの画面上で拡大せずに読める文字」** を意識して撮影してください！
             """)
-            
-        st.subheader("1. ファイルのアップロード")
+
+        st.subheader("1. ファイルのアップロード（Geminiに添付する写真の確認用）")
         uploaded_file = st.file_uploader("画像(JPG/PNG)またはPDFを選んでください", type=["png", "jpg", "jpeg", "pdf"])
-        
+
         st.subheader("2. Kvillage先生へのお願い（モード選択）")
-        mode = st.radio("どのように教えてほしいですか？", [
-            "ヒントだけもらう（行き詰まった時 / チケット消費0枚）",
-            "添削してもらう（解き終わった時 / チケット消費1枚）",
-            "解答・解説をもらう（答え合わせしたい時 / チケット消費0枚）"
-        ], index=1)
-        
-        if uploaded_file and api_key and api_key != "ここにコピーしたAPIキーを貼り付けます":
-            images = []
-            
-            # 画像の抽出
+        mode_labels = {
+            "hint": "ヒントだけもらう（行き詰まった時）",
+            "correction": "添削してもらう（解き終わった時）",
+            "answer": "解答・解説をもらう（答え合わせしたい時）",
+        }
+        mode_choice_label = st.radio("どのように教えてほしいですか？", list(mode_labels.values()), index=1)
+        mode_key = next(k for k, v in mode_labels.items() if v == mode_choice_label)
+
+        if uploaded_file:
             if uploaded_file.name.lower().endswith(".pdf"):
                 images = convert_pdf_to_image(uploaded_file)
             else:
-                img = Image.open(uploaded_file)
-                images = [img]
-                
+                images = [Image.open(uploaded_file)]
+
             if not images:
                 st.error("画像の読み込みに失敗しました。")
-            elif len(images) > 4:
-                st.error(f"⚠️ **画像枚数オーバー（現在 {len(images)}枚）**\n\n一度にまとめて送信・処理できるのは **最大 4枚 まで** です。ページ数を絞ってアップロードし直してください。")
             else:
-                if len(images) > 1:
-                    st.write(f"※全 **{len(images)}** ページを読み込みました。下の各タブから1ページずつ個別に送信するか、まとめて一括送信できます。")
-                    
-                    st.markdown("---")
-                    st.subheader("📦 まとめて一括送信")
-                    st.write("すべての画像を1回の送信としてまとめてAIに添削してもらいます。（※チケット消費量が通常の +1 枚になります）")
-                    
-                    required_tickets = 1 if "添削" in mode else 0
-                    required_tickets += 1
-                    
-                    if st.button(f"すべてのページをまとめて送信する（チケット {required_tickets}枚 消費）", type="primary", use_container_width=True):
-                        with st.spinner(f"Kvillage先生が全 {len(images)} ページをまとめて確認中です...（約20〜40秒かかります）"):
-                            result_text = analyze_with_gemini(images, api_key, mode, student_name, student_id, is_batch=True)
-                            st.session_state["batch_result"] = result_text
+                st.write(f"※ **{len(images)}ページ** 分の画像を読み込みました。Geminiに貼り付ける際は、この写真をすべて添付してください。")
+                cols = st.columns(min(4, len(images)))
+                for i, img in enumerate(images):
+                    with cols[i % len(cols)]:
+                        buffered = io.BytesIO()
+                        img.save(buffered, format="PNG")
+                        img_str = base64.b64encode(buffered.getvalue()).decode()
+                        st.markdown(f'<img src="data:image/png;base64,{img_str}" style="width:100%; border-radius:8px; border:1px solid rgba(255,255,255,0.2);">', unsafe_allow_html=True)
+                        st.caption(f"{i+1}ページ目")
 
-                    if "batch_result" in st.session_state:
-                        result_text = st.session_state["batch_result"]
-                        st.subheader("👨‍🏫 Kvillage先生からの返信 (全ページまとめ)")
-                        st.markdown(result_text)
-                        
-                        safe_text = html.escape(result_text).replace("\\", "\\\\")
-                        html_template = f"""<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <title>Kvillage先生からの解説 - まとめ</title>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script>
-      MathJax = {{
-        tex: {{ inlineMath: [['$', '$']], displayMath: [['$$', '$$']] }}
-      }};
-    </script>
-    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
-    <style>
-        body {{ font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif; line-height: 1.6; padding: 40px; max-width: 800px; margin: 0 auto; color: #333; background: #fff; }}
-        h1 {{ border-bottom: 2px solid #b21010; padding-bottom: 10px; font-size: 1.5em; }}
-        .header-info {{ background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 30px; border-left: 5px solid #b21010; }}
-        @media print {{
-            body {{ padding: 0; }}
-            .no-print {{ display: none; }}
-        }}
-    </style>
-</head>
-<body>
-    <div class="no-print" style="background:#fff3f3; padding:15px; text-align:center; margin-bottom:30px; border:1px solid #ffcccc; border-radius:8px;">
-        💡 <strong>印刷する場合:</strong> キーボードの「Ctrl + P」（Macは Cmd + P）を押してください。<br>
-        この上部のメッセージは印刷時には自動的に消えます。
-    </div>
-    <div class="header-info">
-        <strong>👨‍🏫 Kvillage先生からの解説</strong><br>
-        生徒名: {student_name} さん<br>
-        対象ページ: 全ページまとめ
-    </div>
-    <div id="source" style="display:none;">{safe_text}</div>
-    <div id="content"></div>
-    <script>
-        const text = document.getElementById('source').textContent;
-        document.getElementById('content').innerHTML = marked.parse(text);
-        MathJax.typesetPromise();
-    </script>
-</body>
-</html>"""
-                        st.download_button(
-                            label="📥 このまとめ解説を専用Webページ（印刷用）として保存",
-                            data=html_template,
-                            file_name=f"{student_name}さん_Kvillage先生の解説_まとめ.html",
-                            mime="text/html",
-                            key="dl_btn_batch",
-                            type="secondary"
-                        )
-                    
-                    st.markdown("---")
-                    st.subheader("📄 個別送信（1ページずつ送る場合）")
+                student_data = load_json(STUDENTS_DATA_PATH, {}).get(student_id, {})
+                level = student_data.get("level", 1)
+                streak = student_data.get("login_streak", 1)
 
-                
-                # タブの動的生成
-                if len(images) == 1:
-                    tabs = [st.container()]
-                    tab_names = ["1ページ目"]
-                else:
-                    tab_names = [f"第{i+1}問（{i+1}ページ）" for i in range(len(images))]
-                    tabs = st.tabs(tab_names)
-                
-                # 各タブごとの処理
-                for i, tab in enumerate(tabs):
-                    with tab:
-                        # 画像が巨大にならないよう、画面を4分割して左の1/4に表示する
-                        col_img, col_space = st.columns([1, 3])
-                        with col_img:
-                            # Streamlit標準のst.imageだとフルスクリーン機能が残るバグを回避するため、純粋なHTML画像として描画する
-                            buffered = io.BytesIO()
-                            images[i].save(buffered, format="PNG")
-                            img_str = base64.b64encode(buffered.getvalue()).decode()
-                            st.markdown(f'<img src="data:image/png;base64,{img_str}" style="width:100%; border-radius:8px; border:1px solid rgba(255,255,255,0.2);">', unsafe_allow_html=True)
-                            st.caption(tab_names[i])
-                        
-                        # タブごとに独立した送信ボタンを配置（キーで一意にする）
-                        btn_label = "このページをKvillage先生に送信する" if len(images) > 1 else "Kvillage先生に送信する"
-                        if st.button(btn_label, key=f"btn_analyze_{i}", type="primary"):
-                            with st.spinner(f"Kvillage先生が {tab_names[i]} を確認中です...（約10〜30秒かかります）"):
-                                result_text = analyze_with_gemini(images[i], api_key, mode, student_name, student_id)
-                                st.session_state[f"result_{i}"] = result_text
-
-                        if f"result_{i}" in st.session_state:
-                            result_text = st.session_state[f"result_{i}"]
-                            st.subheader(f"👨‍🏫 Kvillage先生からの返信 ({tab_names[i]})")
-                            st.markdown(result_text)
-                            
-                            # --- HTMLファイルとしてのダウンロード機能 ---
-                            safe_text = html.escape(result_text).replace("\\", "\\\\")
-                            html_template = f"""<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <title>Kvillage先生からの解説 - {tab_names[i]}</title>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script>
-      MathJax = {{
-        tex: {{ inlineMath: [['$', '$']], displayMath: [['$$', '$$']] }}
-      }};
-    </script>
-    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
-    <style>
-        body {{ font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif; line-height: 1.6; padding: 40px; max-width: 800px; margin: 0 auto; color: #333; background: #fff; }}
-        h1 {{ border-bottom: 2px solid #b21010; padding-bottom: 10px; font-size: 1.5em; }}
-        .header-info {{ background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 30px; border-left: 5px solid #b21010; }}
-        @media print {{
-            body {{ padding: 0; }}
-            .no-print {{ display: none; }}
-        }}
-    </style>
-</head>
-<body>
-    <div class="no-print" style="background:#fff3f3; padding:15px; text-align:center; margin-bottom:30px; border:1px solid #ffcccc; border-radius:8px;">
-        💡 <strong>印刷する場合:</strong> キーボードの「Ctrl + P」（Macは Cmd + P）を押してください。<br>
-        この上部のメッセージは印刷時には自動的に消えます。
-    </div>
-    
-    <div class="header-info">
-        <strong>👨‍🏫 Kvillage先生からの解説</strong><br>
-        生徒名: {student_name} さん<br>
-        対象ページ: {tab_names[i]}
-    </div>
-
-    <div id="source" style="display:none;">{safe_text}</div>
-    <div id="content"></div>
-    
-    <script>
-        const text = document.getElementById('source').textContent;
-        document.getElementById('content').innerHTML = marked.parse(text);
-        MathJax.typesetPromise();
-    </script>
-</body>
-</html>"""
-                            
-                            st.download_button(
-                                label="📥 この解説を専用Webページ（印刷用）として保存",
-                                data=html_template,
-                                file_name=f"{student_name}さん_Kvillage先生の解説_{tab_names[i]}.html",
-                                mime="text/html",
-                                key=f"dl_btn_{i}",
-                                type="secondary"
-                            )
+                st.subheader("3. コピー用プロンプト")
+                st.info("①下のプロンプトをコピー → ②Gemini (gemini.google.com) を開く → ③上の写真をすべて添付 → ④プロンプトを貼り付けて送信 → ⑤気になる点はそのまま追加で質問できます！")
+                prompt_text = gemini_service.generate_copy_prompt(mode_key, student_name, level, streak)
+                rpg_ui.render_copy_prompt_box(prompt_text, key="submission")
 
 if __name__ == "__main__":
     main()
