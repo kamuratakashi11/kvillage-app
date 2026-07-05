@@ -152,6 +152,15 @@ def render_battle(unit_id, student_id, student_name, api_key):
     results_key = f"battle_results_{unit_id}"
     reviews_prefix = f"battle_review_{unit_id}_"
 
+    if problems_key not in st.session_state:
+        persisted = rpg_data.load_battle_state(student_id, unit_id)
+        if persisted:
+            st.session_state[hp_key] = persisted.get("enemy_hp", enemy_max_hp)
+            st.session_state[player_hp_key] = persisted.get("player_hp", rpg_data.PLAYER_MAX_HP)
+            st.session_state[problems_key] = persisted.get("problems", [])
+            if persisted.get("results") is not None:
+                st.session_state[results_key] = persisted["results"]
+
     if hp_key not in st.session_state:
         st.session_state[hp_key] = enemy_max_hp
     if player_hp_key not in st.session_state:
@@ -159,6 +168,14 @@ def render_battle(unit_id, student_id, student_name, api_key):
 
     enemy_hp = st.session_state[hp_key]
     player_hp = st.session_state[player_hp_key]
+
+    def _persist_battle_state():
+        rpg_data.save_battle_state(student_id, unit_id, {
+            "problems": st.session_state.get(problems_key, []),
+            "enemy_hp": st.session_state.get(hp_key),
+            "player_hp": st.session_state.get(player_hp_key),
+            "results": st.session_state.get(results_key),
+        })
 
     col1, col2 = st.columns(2)
     with col1:
@@ -175,6 +192,7 @@ def render_battle(unit_id, student_id, student_name, api_key):
         ]
         for k in keys_to_remove:
             del st.session_state[k]
+        rpg_data.clear_battle_state(student_id, unit_id)
 
     if enemy_hp <= 0:
         st.success(f"🎉 {enemy_label} を倒しました！")
@@ -221,6 +239,7 @@ def render_battle(unit_id, student_id, student_name, api_key):
         if st.button("⚔️ 問題を呼び出す", type="primary"):
             st.session_state[problems_key] = rpg_data.pick_battle_problems(unit_topic_name, int(count))
             st.session_state.pop(results_key, None)
+            _persist_battle_state()
             st.rerun()
         return
 
@@ -301,6 +320,7 @@ def render_battle(unit_id, student_id, student_name, api_key):
                         st.session_state[player_hp_key] = max(0, player_hp - total_player_damage)
                         if total_exp > 0:
                             update_student_exp(student_id, total_exp)
+                        _persist_battle_state()
                         st.rerun()
                     except Exception as e:
                         st.error(gemini_service.describe_gemini_error(e))
