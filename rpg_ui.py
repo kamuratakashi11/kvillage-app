@@ -146,6 +146,9 @@ def render_battle(unit_id, student_id, student_name, api_key):
 
     st.title(f"⚔️ {enemy_label} とのバトル")
 
+    if st.session_state.get("_pending_storage_error"):
+        st.error(st.session_state.pop("_pending_storage_error"))
+
     hp_key = f"battle_enemy_hp_{unit_id}"
     player_hp_key = f"battle_player_hp_{unit_id}"
     problems_key = f"battle_problems_{unit_id}"
