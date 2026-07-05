@@ -125,7 +125,25 @@ def set_custom_design():
         color: #ffffff !important;
         background-color: rgba(0, 0, 0, 0.5) !important;
     }}
-
+/* -------------------------------------------------------------------
+       【修正】不要な上部メニューとサイドバー開閉機能を完全に非表示にする
+       ------------------------------------------------------------------- */
+    #MainMenu {{visibility: hidden;}}
+    header {{visibility: hidden !important;}}
+    [data-testid="stHeader"] {{display: none !important;}}
+    [data-testid="stToolbar"] {{display: none !important;}}
+    .stDeployButton {{display: none !important;}}
+    footer {{visibility: hidden;}}
+    
+    /* サイドバー開閉ボタン（「＞」や「✕」アイコン）を完全に消去 */
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stSidebarHeader"] button,
+    section[data-testid="stSidebar"] button[kind="header"] {{
+        display: none !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+    }}
 
     
     div[data-testid="stDecoration"] {{display: none !important;}}
