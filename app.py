@@ -585,7 +585,9 @@ def main():
         st.write("有料版のGemini APIを使い、現在「未分類」となっている問題をすべて自動で判別しタグ付けします。（※1000問あたり約5.5円のコストがかかります）")
         
         unclassified_items = [item for item in db if "未分類" in item.get("topic", [])]
-        
+
+        st.caption("💡 途中で止まっても大丈夫です。20問処理するごとに自動保存されるので、もう一度このボタンを押せば未分類の問題から再開できます。")
+
         if st.button(f"🚀 未分類の問題（残り {len(unclassified_items)} 問）をすべてAIで自動分類する", type="primary", disabled=len(unclassified_items) == 0):
             gemini_key = st.secrets.get("GEMINI_API_KEY", "")
             if not gemini_key:
@@ -593,16 +595,17 @@ def main():
             else:
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                
+
+                SAVE_EVERY = 20
                 success_count = 0
                 total_to_process = len(unclassified_items)
-                
+
                 for idx, current_item in enumerate(unclassified_items):
                     status_text.text(f"処理中 ({idx+1}/{total_to_process}): {current_item.get('university')} の問題をAIが確認中...")
                     img_path = os.path.join(IMG_DIR, current_item.get("image_file", ""))
-                    
+
                     new_tags = auto_tag_problem_with_ai(img_path, gemini_key)
-                    
+
                     if new_tags and new_tags != ["未分類"]:
                         # dbの該当アイテムを更新
                         for db_idx, db_item in enumerate(db):
@@ -610,10 +613,14 @@ def main():
                                 db[db_idx]["topic"] = new_tags
                                 success_count += 1
                                 break
-                                
+
                     progress_bar.progress((idx + 1) / total_to_process)
-                    
-                # 全て終わったら保存
+
+                    # 途中経過をこまめに保存し、中断してもここまでの結果が失われないようにする
+                    if (idx + 1) % SAVE_EVERY == 0:
+                        save_json(DB_PATH, db)
+
+                # 最後に必ず保存する
                 save_json(DB_PATH, db)
                 status_text.success(f"🎉 自動分類が完了しました！ ({success_count}問を新しく分類しました)")
                 st.toast("AIによる自動分類が完了しました！", icon="🤖")
