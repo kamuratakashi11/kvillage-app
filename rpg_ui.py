@@ -218,13 +218,10 @@ def render_battle(unit_id, student_id, student_name, api_key):
         max_count = min(10, available)
         count = st.number_input("挑戦する問題数", min_value=1, max_value=max_count, value=min(3, max_count), step=1, key=f"battle_count_{unit_id}")
 
-        if st.button(f"⚔️ 問題を呼び出す（チケット{int(count)}枚消費）", type="primary"):
-            if not consume_tickets(student_id, int(count)):
-                st.error("⚠️ チケットが足りません！明日ログインしてボーナスチケットを受け取ってください。")
-            else:
-                st.session_state[problems_key] = rpg_data.pick_battle_problems(unit_topic_name, int(count))
-                st.session_state.pop(results_key, None)
-                st.rerun()
+        if st.button("⚔️ 問題を呼び出す", type="primary"):
+            st.session_state[problems_key] = rpg_data.pick_battle_problems(unit_topic_name, int(count))
+            st.session_state.pop(results_key, None)
+            st.rerun()
         return
 
     problems = st.session_state[problems_key]
@@ -278,9 +275,12 @@ def render_battle(unit_id, student_id, student_name, api_key):
             elif len(answer_images) > n:
                 st.info(f"アップロードされたページ数（{len(answer_images)}）が問題数（{n}）より多いため、最初の{n}ページのみ採点に使います。")
 
-            if st.button("🎯 まとめて採点する", type="primary"):
+            grade_count = min(n, len(answer_images))
+            if st.button(f"🎯 まとめて採点する（チケット{grade_count}枚消費）", type="primary"):
                 if not api_key:
                     st.error("システムエラー: 裏側のAI設定（APIキー）が完了していません。Kvillage先生に報告してください。")
+                elif not consume_tickets(student_id, grade_count):
+                    st.error("⚠️ チケットが足りません！明日ログインしてボーナスチケットを受け取ってください。")
                 else:
                     pairs = list(zip(problems, answer_images))
                     try:
