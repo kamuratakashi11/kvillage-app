@@ -34,3 +34,15 @@ def convert_pdf_to_image(uploaded_file):
         # 処理が終わったら確実に一時ファイルを削除
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+
+
+def image_files_to_pdf_bytes(image_paths):
+    """複数の画像ファイルを、1枚1ページの複数ページPDFバイト列に変換する（GoodNotes等への貼り付け用）"""
+    out_doc = fitz.open()
+    for path in image_paths:
+        img_doc = fitz.open(path)
+        out_doc.insert_pdf(fitz.open("pdf", img_doc.convert_to_pdf()))
+        img_doc.close()
+    pdf_bytes = out_doc.write()
+    out_doc.close()
+    return pdf_bytes
