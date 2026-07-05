@@ -15,7 +15,6 @@ from storage import (
 from student_state import (
     init_student_data, process_daily_login, get_level_info,
 )
-from image_utils import convert_pdf_to_image
 import gemini_service
 import rpg_data
 import rpg_ui
@@ -945,7 +944,7 @@ def main():
 
     elif page == "提出＆Kvillage先生に質問する":
         st.title("📝 解答提出 ＆ Kvillage先生に質問しよう")
-        st.write("解き終わったプリント（書き込み済みのもの）の写真かPDFをアップロードすると、Geminiにそのまま貼り付けて使える専用プロンプトを作成します。自分のGeminiアプリに貼り付ければ、会話を続けながら気になることを何度でも質問できます！")
+        st.write("Geminiにそのまま貼り付けて使える専用プロンプトを作成します。自分のGeminiアプリを開いて、解いた問題の写真を直接添付し、このプロンプトを貼り付ければ、会話を続けながら気になることを何度でも質問できます！")
 
         with st.expander("📸 【重要】Geminiに正しく読み取ってもらうための写真の撮り方", expanded=True):
             st.markdown("""
@@ -964,10 +963,7 @@ def main():
             👉 **「スマホの画面上で拡大せずに読める文字」** を意識して撮影してください！
             """)
 
-        st.subheader("1. ファイルのアップロード（Geminiに添付する写真の確認用）")
-        uploaded_file = st.file_uploader("画像(JPG/PNG)またはPDFを選んでください", type=["png", "jpg", "jpeg", "pdf"])
-
-        st.subheader("2. Kvillage先生へのお願い（モード選択）")
+        st.subheader("1. Kvillage先生へのお願い（モード選択）")
         mode_labels = {
             "hint": "ヒントだけもらう（行き詰まった時）",
             "correction": "添削してもらう（解き終わった時）",
@@ -976,33 +972,14 @@ def main():
         mode_choice_label = st.radio("どのように教えてほしいですか？", list(mode_labels.values()), index=1)
         mode_key = next(k for k, v in mode_labels.items() if v == mode_choice_label)
 
-        if uploaded_file:
-            if uploaded_file.name.lower().endswith(".pdf"):
-                images = convert_pdf_to_image(uploaded_file)
-            else:
-                images = [Image.open(uploaded_file)]
+        student_data = load_json(STUDENTS_DATA_PATH, {}).get(student_id, {})
+        level = student_data.get("level", 1)
+        streak = student_data.get("login_streak", 1)
 
-            if not images:
-                st.error("画像の読み込みに失敗しました。")
-            else:
-                st.write(f"※ **{len(images)}ページ** 分の画像を読み込みました。Geminiに貼り付ける際は、この写真をすべて添付してください。")
-                cols = st.columns(min(4, len(images)))
-                for i, img in enumerate(images):
-                    with cols[i % len(cols)]:
-                        buffered = io.BytesIO()
-                        img.save(buffered, format="PNG")
-                        img_str = base64.b64encode(buffered.getvalue()).decode()
-                        st.markdown(f'<img src="data:image/png;base64,{img_str}" style="width:100%; border-radius:8px; border:1px solid rgba(255,255,255,0.2);">', unsafe_allow_html=True)
-                        st.caption(f"{i+1}ページ目")
-
-                student_data = load_json(STUDENTS_DATA_PATH, {}).get(student_id, {})
-                level = student_data.get("level", 1)
-                streak = student_data.get("login_streak", 1)
-
-                st.subheader("3. コピー用プロンプト")
-                st.info("①下のプロンプトをコピー → ②Gemini (gemini.google.com) を開く → ③上の写真をすべて添付 → ④プロンプトを貼り付けて送信 → ⑤気になる点はそのまま追加で質問できます！")
-                prompt_text = gemini_service.generate_copy_prompt(mode_key, student_name, level, streak)
-                rpg_ui.render_copy_prompt_box(prompt_text, key="submission")
+        st.subheader("2. コピー用プロンプト")
+        st.info("①下のプロンプトをコピー → ②Gemini (gemini.google.com) を開く → ③解いた問題の写真をGeminiに直接添付（このアプリへのアップロードは不要です） → ④プロンプトを貼り付けて送信 → ⑤気になる点はそのまま追加で質問できます！")
+        prompt_text = gemini_service.generate_copy_prompt(mode_key, student_name, level, streak)
+        rpg_ui.render_copy_prompt_box(prompt_text, key="submission")
 
 if __name__ == "__main__":
     main()
