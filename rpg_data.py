@@ -1,6 +1,6 @@
 import random
 
-from storage import load_json, save_json, STUDENTS_DATA_PATH, DB_PATH
+from storage import load_json, save_json, STUDENTS_DATA_PATH, DB_PATH, BATTLE_STATE_PATH
 
 UNITS = [
     {"id": "suushiki", "name": "数と式", "topic": "数と式", "icon": "⚔️", "enemy_name": "計算スライム", "order": 1},
@@ -145,3 +145,22 @@ def pick_battle_problems(topic, count):
         return []
     count = min(count, len(pool))
     return [_to_battle_problem(item) for item in random.sample(pool, count)]
+
+
+def load_battle_state(student_id, unit_id):
+    """ブラウザを閉じても再開できるよう、進行中のバトル（出題内容・HP・採点結果）を取得する"""
+    data = load_json(BATTLE_STATE_PATH, {})
+    return data.get(student_id, {}).get(unit_id)
+
+
+def save_battle_state(student_id, unit_id, state):
+    data = load_json(BATTLE_STATE_PATH, {})
+    data.setdefault(student_id, {})[unit_id] = state
+    save_json(BATTLE_STATE_PATH, data)
+
+
+def clear_battle_state(student_id, unit_id):
+    data = load_json(BATTLE_STATE_PATH, {})
+    if student_id in data and unit_id in data[student_id]:
+        del data[student_id][unit_id]
+        save_json(BATTLE_STATE_PATH, data)
