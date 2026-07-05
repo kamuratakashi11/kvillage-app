@@ -1,4 +1,6 @@
 import base64
+import io
+import os
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -7,6 +9,7 @@ from PIL import Image
 import gemini_service
 import rpg_data
 from image_utils import convert_pdf_to_image
+from storage import IMG_DIR
 from student_state import consume_tickets, update_student_exp
 
 
@@ -143,10 +146,6 @@ def render_battle(unit_id, student_id, student_name, api_key):
 
     st.title(f"⚔️ {enemy_label} とのバトル")
 
-    if not api_key:
-        st.error("システムエラー: 裏側のAI設定（APIキー）が完了していません。Kvillage先生に報告してください。")
-        return
-
     hp_key = f"battle_enemy_hp_{unit_id}"
     player_hp_key = f"battle_player_hp_{unit_id}"
     problem_key = f"battle_problem_{unit_id}"
@@ -210,22 +209,28 @@ def render_battle(unit_id, student_id, student_name, api_key):
     if problem_key not in st.session_state:
         st.write("チケットを1枚使って問題を呼び出そう。")
         if st.button("⚔️ 問題を呼び出す（チケット1枚消費）", type="primary"):
-            if not consume_tickets(student_id, 1):
+            problem = rpg_data.pick_battle_problem(unit_topic_name)
+            if problem is None:
+                st.warning("この分野にはまだバトル用に準備された問題がありません。先生に「🏷️ 問題のタグ付け作業」ページで、バトル用データ（難易度・正解）を生成してもらってください。")
+            elif not consume_tickets(student_id, 1):
                 st.error("⚠️ チケットが足りません！明日ログインしてボーナスチケットを受け取ってください。")
             else:
-                try:
-                    with st.spinner("敵が問題を出してきた..."):
-                        problem = gemini_service.generate_battle_problem(unit_topic_name, api_key)
-                    st.session_state[problem_key] = problem
-                    st.session_state.pop(result_key, None)
-                    st.rerun()
-                except Exception as e:
-                    st.error(gemini_service.describe_gemini_error(e))
+                st.session_state[problem_key] = problem
+                st.session_state.pop(result_key, None)
+                st.rerun()
         return
 
     problem = st.session_state[problem_key]
     st.subheader(f"📜 出題（難易度: {problem.get('difficulty', '普通')} / 正解でEXP {problem['exp_value']}）")
-    st.markdown(problem["problem_text"])
+    problem_img_path = os.path.join(IMG_DIR, problem["image_file"])
+    if os.path.exists(problem_img_path):
+        problem_img = Image.open(problem_img_path)
+        buffered = io.BytesIO()
+        problem_img.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        st.markdown(f'<img src="data:image/png;base64,{img_str}" style="width:100%; max-width:600px; border-radius:8px; border:1px solid rgba(255,255,255,0.2);">', unsafe_allow_html=True)
+    else:
+        st.error("問題画像が見つかりませんでした。")
 
     st.subheader("✍️ 手書きで解いて、写真かPDFをアップロード")
     uploaded_file = st.file_uploader("画像(JPG/PNG)またはPDF", type=["png", "jpg", "jpeg", "pdf"], key=f"battle_upload_{unit_id}")
@@ -240,20 +245,23 @@ def render_battle(unit_id, student_id, student_name, api_key):
         if image is None:
             st.error("画像の読み込みに失敗しました。")
         elif st.button("🎯 採点する", type="primary"):
-            try:
-                with st.spinner("敵が解答を確認中..."):
-                    result = gemini_service.judge_battle_answer(image, problem["correct_answer"], api_key)
-                st.session_state[result_key] = result
+            if not api_key:
+                st.error("システムエラー: 裏側のAI設定（APIキー）が完了していません。Kvillage先生に報告してください。")
+            else:
+                try:
+                    with st.spinner("敵が解答を確認中..."):
+                        result = gemini_service.judge_battle_answer(image, problem["correct_answer"], api_key)
+                    st.session_state[result_key] = result
 
-                if result["is_correct"]:
-                    damage = problem["exp_value"] * rpg_data.DAMAGE_PER_CORRECT_MULTIPLIER
-                    st.session_state[hp_key] = max(0, enemy_hp - damage)
-                    update_student_exp(student_id, problem["exp_value"])
-                else:
-                    st.session_state[player_hp_key] = max(0, player_hp - rpg_data.DAMAGE_ON_WRONG)
-                st.rerun()
-            except Exception as e:
-                st.error(gemini_service.describe_gemini_error(e))
+                    if result["is_correct"]:
+                        damage = problem["exp_value"] * rpg_data.DAMAGE_PER_CORRECT_MULTIPLIER
+                        st.session_state[hp_key] = max(0, enemy_hp - damage)
+                        update_student_exp(student_id, problem["exp_value"])
+                    else:
+                        st.session_state[player_hp_key] = max(0, player_hp - rpg_data.DAMAGE_ON_WRONG)
+                    st.rerun()
+                except Exception as e:
+                    st.error(gemini_service.describe_gemini_error(e))
 
     if result_key in st.session_state:
         result = st.session_state[result_key]
@@ -264,11 +272,20 @@ def render_battle(unit_id, student_id, student_name, api_key):
 
         if st.button("📖 くわしく添削してほしい"):
             st.session_state[review_key] = gemini_service.generate_battle_review_prompt(
-                unit_topic_name, problem["problem_text"], problem["correct_answer"]
+                unit_topic_name, problem["correct_answer"]
             )
 
         if review_key in st.session_state:
-            st.info("下のプロンプトをコピーし、Gemini (gemini.google.com) を開いて、解答の写真と一緒に貼り付けて送信してください。")
+            st.info("①下の「問題の画像を保存する」ボタンで問題画像を保存 → ②Gemini (gemini.google.com) を開く → ③保存した問題画像とあなたの解答の写真の両方を添付 → ④下のプロンプトをコピーして貼り付けて送信してください。")
+            if os.path.exists(problem_img_path):
+                with open(problem_img_path, "rb") as f:
+                    st.download_button(
+                        "📥 問題の画像を保存する",
+                        data=f.read(),
+                        file_name=problem["image_file"],
+                        mime="image/png",
+                        key=f"dl_problem_{unit_id}",
+                    )
             render_copy_prompt_box(st.session_state[review_key], key=f"review_{unit_id}")
 
         if st.button("⚔️ 次の問題に挑む（チケット1枚消費）", type="primary"):

@@ -619,6 +619,46 @@ def main():
                 st.toast("AIによる自動分類が完了しました！", icon="🤖")
                 st.rerun()
 
+        # --- 💡【追加】RPGバトル用データ（難易度・正解）の自動生成 ---
+        st.markdown("---")
+        st.subheader("🎮 バトル用データの自動生成（難易度・正解）")
+        st.write("有料版のGemini APIを使い、まだ「正解」が登録されていない問題にAIが実際に解答し、「難易度」と「正解」を自動生成します。RPGバトル機能で出題するために必要な作業です。（※証明問題など、簡潔な答えにできない問題は自動的にスキップされます）")
+
+        not_enriched_items = [item for item in db if not item.get("correct_answer")]
+
+        if st.button(f"🚀 未対応の問題（残り {len(not_enriched_items)} 問）をすべてAIに解かせる", type="primary", disabled=len(not_enriched_items) == 0, key="btn_enrich_battle"):
+            gemini_key = st.secrets.get("GEMINI_API_KEY", "")
+            if not gemini_key:
+                st.error("APIキーが設定されていません。")
+            else:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                success_count = 0
+                total_to_process = len(not_enriched_items)
+
+                for idx, current_item in enumerate(not_enriched_items):
+                    status_text.text(f"処理中 ({idx+1}/{total_to_process}): {current_item.get('university')} の問題をAIが解答中...")
+                    img_path = os.path.join(IMG_DIR, current_item.get("image_file", ""))
+
+                    result = gemini_service.enrich_problem_for_battle(img_path, gemini_key)
+
+                    if result:
+                        for db_idx, db_item in enumerate(db):
+                            if db_item.get("image_file") == current_item.get("image_file"):
+                                db[db_idx]["difficulty"] = result["difficulty"]
+                                db[db_idx]["correct_answer"] = result["correct_answer"]
+                                success_count += 1
+                                break
+
+                    progress_bar.progress((idx + 1) / total_to_process)
+
+                # 全て終わったら保存
+                save_json(DB_PATH, db)
+                status_text.success(f"🎉 バトル用データの生成が完了しました！ ({success_count}問がバトルで出題可能になりました)")
+                st.toast("バトル用データの生成が完了しました！", icon="🎮")
+                st.rerun()
+
         st.markdown("---")
         st.subheader("✍️ 個別での確認・修正")
         
