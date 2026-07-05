@@ -1,7 +1,9 @@
 import json
+import os
 import re
 import streamlit as st
 import google.generativeai as genai
+from PIL import Image
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -77,36 +79,43 @@ def generate_copy_prompt(mode, student_name, level, streak):
     return header + "\n" + FORMAT_RULES
 
 
-# --- RPGバトル: 問題の自動生成 ---
+# --- RPGバトル用データの生成: 既存問題（画像）をAIに解かせて難易度・正解を登録する ---
 
-BATTLE_PROBLEM_PROMPT_TEMPLATE = """あなたは高校数学の入試問題作成者です。
-分野「{unit}」の高校数学の問題を1問、難易度「基礎〜標準」の範囲で新しく作成してください。
+PROBLEM_ENRICHMENT_PROMPT = """あなたは高校数学の教師です。添付された入試問題の画像を見て、この問題を実際に解いてください。
 
 以下のJSON形式で必ず出力してください（他の文章は一切含めないこと）:
 {{
-  "problem_text": "問題文。数式はLaTeXのインライン記法（$...$）またはブロック記法（$$...$$）で書くこと。",
-  "correct_answer": "最終的な答え（数値または簡潔な式。採点の照合に使うので簡潔に）",
-  "exp_value": 難易度に応じて10から40の範囲で決定した整数の経験値,
-  "difficulty": "易しい・普通・難しい のいずれか"
+  "difficulty": "易しい・普通・難しい のいずれか",
+  "correct_answer": "この問題の最終的な答え（数値または簡潔な式）。証明問題など、簡潔な答えの形にできない場合は空文字にすること。",
+  "solvable": この問題を解いて明確な最終解答を出せた場合はtrue、証明問題や解答が定まらない場合はfalseの真偽値
 }}
 """
 
 
-def generate_battle_problem(unit_name, api_key):
+def enrich_problem_for_battle(image_path, api_key):
+    """既存の問題画像をAIに解かせ、RPGバトルで使う難易度・正解を生成する。証明問題等で解答が定まらない場合はNoneを返す。"""
+    if not os.path.exists(image_path):
+        return None
+
     genai.configure(api_key=api_key)
     model_name = get_flash_model_name(api_key)
     model = genai.GenerativeModel(
         model_name=model_name,
         generation_config={"response_mime_type": "application/json"}
     )
-    prompt = BATTLE_PROBLEM_PROMPT_TEMPLATE.format(unit=unit_name)
-    response = model.generate_content(prompt)
+
+    img = Image.open(image_path)
+    img.thumbnail((1024, 1024))
+
+    response = model.generate_content([PROBLEM_ENRICHMENT_PROMPT, img])
     data = json.loads(response.text)
+
+    if not data.get("solvable", False) or not str(data.get("correct_answer", "")).strip():
+        return None
+
     return {
-        "problem_text": data["problem_text"],
-        "correct_answer": str(data["correct_answer"]),
-        "exp_value": int(data.get("exp_value", 20)),
         "difficulty": data.get("difficulty", "普通"),
+        "correct_answer": str(data.get("correct_answer")).strip(),
     }
 
 
@@ -144,16 +153,13 @@ def judge_battle_answer(image, correct_answer, api_key):
 
 # --- RPGバトル: くわしい添削が欲しい生徒向けのコピペ用プロンプト ---
 
-def generate_battle_review_prompt(unit_name, problem_text, correct_answer):
+def generate_battle_review_prompt(unit_name, correct_answer):
     header = f"""あなたは高校の数学教師「Kvillage先生」です。RPG風の数学学習アプリで、生徒が「{unit_name}」分野のバトル問題に挑戦しました。
 
-【問題文】
-{problem_text}
+このメッセージと一緒に、①解いた問題の画像 と ②生徒が手書きで解いた解答の画像、の2枚が添付されています。まずその両方の画像を読み取ってください。
 
 【模範解答（最終的な答え）】
 {correct_answer}
-
-このメッセージと一緒に、生徒が手書きで解いた解答の写真（またはPDF）が添付されています。まずその画像を読み取ってください。
 
 生徒の解答のどこが合っていて、どこが間違っているかを具体的に指摘し、間違えた場合はどの考え方を修正すればよいか丁寧に教えてください。この後、生徒から追加の質問が来るかもしれないので、対話を続けるつもりで答えてください。
 """

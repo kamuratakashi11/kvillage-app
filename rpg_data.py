@@ -1,4 +1,6 @@
-from storage import load_json, save_json, STUDENTS_DATA_PATH
+import random
+
+from storage import load_json, save_json, STUDENTS_DATA_PATH, DB_PATH
 
 UNITS = [
     {"id": "suushiki", "name": "数と式", "topic": "数と式", "icon": "⚔️", "enemy_name": "計算スライム", "order": 1},
@@ -27,6 +29,8 @@ PLAYER_MAX_HP = 100
 DAMAGE_ON_WRONG = 20
 
 BOSS_ENEMY_MAX_HP = 250
+
+DIFFICULTY_EXP = {"易しい": 15, "普通": 25, "難しい": 40}
 
 
 def get_unit(unit_id):
@@ -104,3 +108,28 @@ def record_boss_win(student_id):
     data[student_id] = student
     save_json(STUDENTS_DATA_PATH, data)
     return student
+
+
+def pick_battle_problem(topic):
+    """db.json（既存の問題バンク）から、指定分野で正解が登録済みの問題をランダムに1問選ぶ"""
+    db = load_json(DB_PATH, [])
+
+    pool = []
+    for item in db:
+        item_topics = item.get("topic", [])
+        if isinstance(item_topics, str):
+            item_topics = [item_topics]
+        if topic in item_topics and str(item.get("correct_answer", "")).strip():
+            pool.append(item)
+
+    if not pool:
+        return None
+
+    item = random.choice(pool)
+    difficulty = item.get("difficulty", "普通")
+    return {
+        "image_file": item["image_file"],
+        "correct_answer": item["correct_answer"],
+        "difficulty": difficulty,
+        "exp_value": DIFFICULTY_EXP.get(difficulty, 25),
+    }
