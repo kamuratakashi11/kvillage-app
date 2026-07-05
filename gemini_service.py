@@ -108,7 +108,11 @@ def enrich_problem_for_battle(image_path, api_key):
     img.thumbnail((1024, 1024))
 
     response = model.generate_content([PROBLEM_ENRICHMENT_PROMPT, img])
-    data = json.loads(response.text)
+    try:
+        data = json.loads(response.text)
+    except (json.JSONDecodeError, ValueError) as e:
+        snippet = (response.text or "")[:200]
+        raise RuntimeError(f"Geminiの応答がJSONとして解釈できませんでした: {e} / 応答内容: {snippet!r}") from e
 
     if not data.get("solvable", False) or not str(data.get("correct_answer", "")).strip():
         return None

@@ -642,20 +642,29 @@ def main():
             else:
                 progress_bar = st.progress(0)
                 status_text = st.empty()
+                error_box = st.empty()
 
                 SAVE_EVERY = 20
                 success_count = 0
+                skipped_count = 0
                 error_count = 0
+                last_error = None
                 total_to_process = len(not_enriched_items)
 
                 for idx, current_item in enumerate(not_enriched_items):
-                    status_text.text(f"処理中 ({idx+1}/{total_to_process}): {current_item.get('university')} の問題をAIが解答中... (成功: {success_count}件 / スキップ・エラー: {error_count}件)")
+                    status_text.text(f"処理中 ({idx+1}/{total_to_process}): {current_item.get('university')} の問題をAIが解答中... (成功: {success_count}件 / スキップ: {skipped_count}件 / エラー: {error_count}件)")
                     img_path = os.path.join(IMG_DIR, current_item.get("image_file", ""))
 
                     try:
                         result = gemini_service.enrich_problem_for_battle(img_path, gemini_key)
-                    except Exception:
+                    except Exception as e:
                         result = None
+                        error_count += 1
+                        last_error = str(e)
+                        error_box.error(f"直近のエラー: {last_error}")
+                    else:
+                        if result is None:
+                            skipped_count += 1
 
                     if result:
                         for db_idx, db_item in enumerate(db):
@@ -664,8 +673,6 @@ def main():
                                 db[db_idx]["correct_answer"] = result["correct_answer"]
                                 success_count += 1
                                 break
-                    else:
-                        error_count += 1
 
                     progress_bar.progress((idx + 1) / total_to_process)
 
@@ -675,7 +682,9 @@ def main():
 
                 # 最後に必ず保存する
                 save_json(DB_PATH, db)
-                status_text.success(f"🎉 バトル用データの生成が完了しました！ ({success_count}問がバトルで出題可能になりました / スキップ・エラー{error_count}件)")
+                status_text.success(f"🎉 バトル用データの生成が完了しました！ (成功: {success_count}問 / スキップ: {skipped_count}問 / エラー: {error_count}件)")
+                if error_count > 0:
+                    st.error(f"⚠️ {error_count}件でエラーが発生しました。直近のエラー内容: {last_error}")
                 st.toast("バトル用データの生成が完了しました！", icon="🎮")
                 st.rerun()
 
