@@ -110,10 +110,9 @@ def record_boss_win(student_id):
     return student
 
 
-def pick_battle_problem(topic):
-    """db.json（既存の問題バンク）から、指定分野で正解が登録済みの問題をランダムに1問選ぶ"""
+def _battle_ready_pool(topic):
+    """db.json（既存の問題バンク）から、指定分野で正解が登録済みの問題一覧を返す"""
     db = load_json(DB_PATH, [])
-
     pool = []
     for item in db:
         item_topics = item.get("topic", [])
@@ -121,11 +120,15 @@ def pick_battle_problem(topic):
             item_topics = [item_topics]
         if topic in item_topics and str(item.get("correct_answer", "")).strip():
             pool.append(item)
+    return pool
 
-    if not pool:
-        return None
 
-    item = random.choice(pool)
+def count_available_battle_problems(topic):
+    """指定分野でバトルに出題可能な（正解登録済みの）問題数を返す"""
+    return len(_battle_ready_pool(topic))
+
+
+def _to_battle_problem(item):
     difficulty = item.get("difficulty", "普通")
     return {
         "image_file": item["image_file"],
@@ -133,3 +136,12 @@ def pick_battle_problem(topic):
         "difficulty": difficulty,
         "exp_value": DIFFICULTY_EXP.get(difficulty, 25),
     }
+
+
+def pick_battle_problems(topic, count):
+    """指定分野で正解が登録済みの問題を、重複無しで最大count問ランダムに選ぶ"""
+    pool = _battle_ready_pool(topic)
+    if not pool:
+        return []
+    count = min(count, len(pool))
+    return [_to_battle_problem(item) for item in random.sample(pool, count)]
