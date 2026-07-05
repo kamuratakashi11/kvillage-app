@@ -8,7 +8,7 @@ from PIL import Image
 
 import gemini_service
 import rpg_data
-from image_utils import convert_pdf_to_image, image_files_to_pdf_bytes
+from image_utils import convert_pdf_to_image, image_files_to_pdf_bytes, build_labeled_pdf
 from storage import IMG_DIR
 from student_state import consume_tickets, update_student_exp
 
@@ -336,6 +336,29 @@ def render_battle(unit_id, student_id, student_name, api_key):
                                 key=f"dl_problem_{unit_id}_{i}",
                             )
                     render_copy_prompt_box(st.session_state[review_flag_key], key=f"review_{unit_id}_{i}")
+
+        st.markdown("---")
+        st.subheader("🧠 NotebookLMで弱点を分析してもらおう")
+        st.write("今回解いた問題と正誤結果をまとめたPDFを作りました。NotebookLMに読み込ませて、自分の弱点を分析してもらいましょう。")
+
+        karute_entries = [
+            (problem_img_paths[i], f"第{i+1}問（難易度: {problems[i].get('difficulty', '普通')}）: {'正解' if r['is_correct'] else '不正解'}")
+            for i, r in enumerate(results)
+            if os.path.exists(problem_img_paths[i])
+        ]
+        if karute_entries:
+            st.download_button(
+                "📥 学習カルテPDFをダウンロード",
+                data=build_labeled_pdf(karute_entries),
+                file_name="gakushu_karute.pdf",
+                mime="application/pdf",
+                key=f"dl_karute_{unit_id}",
+            )
+            st.info("①NotebookLM (notebooklm.google.com) を開く → ②「ソースを追加」でこのPDFをアップロード → ③下の質問をコピーして貼り付けて聞いてみよう")
+            render_copy_prompt_box(
+                gemini_service.generate_notebooklm_analysis_prompt(unit_topic_name, correct_count, len(results)),
+                key=f"notebooklm_{unit_id}",
+            )
 
         if st.button("⚔️ 次のバトルに挑む", type="primary"):
             _reset_battle_session()
