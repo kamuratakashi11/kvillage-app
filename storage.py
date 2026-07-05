@@ -75,6 +75,7 @@ def save_json(path, data):
 
     # 生徒データの書き込みはすべてFirestoreへ送る
     if db_client is None:
+        st.session_state["_pending_storage_error"] = f"🚨 **DB保存エラー**: Firestoreが初期化されていません（{db_error}）"
         return
 
     doc_name = os.path.basename(path).replace(".json", "")
@@ -82,4 +83,8 @@ def save_json(path, data):
         doc_ref = db_client.collection("kvillage_data").document(doc_name)
         doc_ref.set({"data": data})
     except Exception as e:
-        st.error(f"🚨 **DB保存エラー ({doc_name})**: {e}")
+        message = f"🚨 **DB保存エラー ({doc_name})**: {e}"
+        # st.rerun()が直後に呼ばれる呼び出し元だとst.error()の表示が一瞬で消えてしまうため、
+        # 次の再描画でも表示できるようセッションに保持しておく
+        st.session_state["_pending_storage_error"] = message
+        st.error(message)
