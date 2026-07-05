@@ -626,6 +626,8 @@ def main():
 
         not_enriched_items = [item for item in db if not item.get("correct_answer")]
 
+        st.caption("💡 途中で止まっても大丈夫です。20問処理するごとに自動保存されるので、もう一度このボタンを押せば未対応の問題から再開できます。")
+
         if st.button(f"🚀 未対応の問題（残り {len(not_enriched_items)} 問）をすべてAIに解かせる", type="primary", disabled=len(not_enriched_items) == 0, key="btn_enrich_battle"):
             gemini_key = st.secrets.get("GEMINI_API_KEY", "")
             if not gemini_key:
@@ -634,14 +636,19 @@ def main():
                 progress_bar = st.progress(0)
                 status_text = st.empty()
 
+                SAVE_EVERY = 20
                 success_count = 0
+                error_count = 0
                 total_to_process = len(not_enriched_items)
 
                 for idx, current_item in enumerate(not_enriched_items):
-                    status_text.text(f"処理中 ({idx+1}/{total_to_process}): {current_item.get('university')} の問題をAIが解答中...")
+                    status_text.text(f"処理中 ({idx+1}/{total_to_process}): {current_item.get('university')} の問題をAIが解答中... (成功: {success_count}件 / スキップ・エラー: {error_count}件)")
                     img_path = os.path.join(IMG_DIR, current_item.get("image_file", ""))
 
-                    result = gemini_service.enrich_problem_for_battle(img_path, gemini_key)
+                    try:
+                        result = gemini_service.enrich_problem_for_battle(img_path, gemini_key)
+                    except Exception:
+                        result = None
 
                     if result:
                         for db_idx, db_item in enumerate(db):
@@ -650,12 +657,18 @@ def main():
                                 db[db_idx]["correct_answer"] = result["correct_answer"]
                                 success_count += 1
                                 break
+                    else:
+                        error_count += 1
 
                     progress_bar.progress((idx + 1) / total_to_process)
 
-                # 全て終わったら保存
+                    # 途中経過をこまめに保存し、中断してもここまでの結果が失われないようにする
+                    if (idx + 1) % SAVE_EVERY == 0:
+                        save_json(DB_PATH, db)
+
+                # 最後に必ず保存する
                 save_json(DB_PATH, db)
-                status_text.success(f"🎉 バトル用データの生成が完了しました！ ({success_count}問がバトルで出題可能になりました)")
+                status_text.success(f"🎉 バトル用データの生成が完了しました！ ({success_count}問がバトルで出題可能になりました / スキップ・エラー{error_count}件)")
                 st.toast("バトル用データの生成が完了しました！", icon="🎮")
                 st.rerun()
 
