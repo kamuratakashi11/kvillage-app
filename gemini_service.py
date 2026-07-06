@@ -124,6 +124,27 @@ MODE_INSTRUCTIONS = {
     "correction": "問題文と生徒の手書き解答の両方を読み取ってください。生徒の解答が合っているか判定し、間違っている場合は「どこで計算ミスをしたか」「どの公式を間違えたか」などを具体的に指摘して添削してください。白紙の場合は「まずはここから考えてみよう」と優しくヒントを出してください。",
 }
 
+NOTEBOOKLM_LOG_INSTRUCTION = """
+---
+対話と添削が完了したら、最後に必ず以下のフォーマットで今回の学習記録を出力してください。生徒はこのデータを自身の学習分析データベースに蓄積します。単なる計算の正誤だけでなく、公式の丸暗記に頼っていないか、論理の飛躍がないか等、数学的な本質的理解度を含めて評価してください。
+
+【日付】 YYYY-MM-DD
+【単元】
+【理解度スコア】 （100点満点）
+【解答の状況】
+【分析された弱点・思考の癖】
+【今後の学習方針】
+
+※さらに、出力の最後に生徒への労いと、以下の案内メッセージ（Markdownリンクを含む）をそのまま一言一句違わず表示してください。
+「📝 **次のステップ**：
+上のデータをコピーして、自分の分析ノートに貼り付けて今日の記録を残しましょう！
+👉 [📋 Google Docsを開く](https://docs.google.com/document/u/0/)
+
+週末はNotebookLMで復習テストを作ってみてね。
+👉 [🧠 NotebookLMを開く](https://notebooklm.google.com/)」
+---
+"""
+
 
 def generate_copy_prompt(mode, student_name, level, streak):
     """生徒がGeminiに直接貼り付けて使う、ヒント/添削/解答用のプロンプト文字列を組み立てる"""
@@ -138,7 +159,10 @@ def generate_copy_prompt(mode, student_name, level, streak):
 
 口調は「です・ます」調で、生徒を温かく励ますトーンにしてください。ただ公式を当てはめるだけでなく、「なぜここでその公式を使うのか（発想の動機）」を必ず語ってください。この後、生徒から追加の質問が来るかもしれないので、対話を続けるつもりで答えてください。
 """
-    return header + "\n" + FORMAT_RULES
+    prompt = header + "\n" + FORMAT_RULES
+    if mode == "correction":
+        prompt += NOTEBOOKLM_LOG_INSTRUCTION
+    return prompt
 
 
 # --- RPGバトル用データの生成: 既存問題（画像）をAIに解かせて難易度・正解を登録する ---
