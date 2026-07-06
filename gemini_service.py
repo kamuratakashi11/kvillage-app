@@ -8,22 +8,27 @@ from PIL import Image
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_flash_model_name(api_key):
-    """APIキーに紐づく利用可能なFlashモデルの名前を1回だけ取得し、キャッシュする"""
+    """APIキーに紐づく利用可能な中で、最も安価なFlash系モデルの名前を1回だけ取得し、キャッシュする"""
     try:
         genai.configure(api_key=api_key)
         models = [m for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
 
-        for m in models:
-            if 'gemini-1.5-flash' in m.name:
-                return m.name
+        # gemini-1.5-flash は廃止済みのため、単に「flash」を含む最初のモデルを選ぶと
+        # 「思考(thinking)」機能付きの新しい高額なFlashモデル（例: gemini-3.5-flash）を
+        # 誤って選んでしまうことがある。最も安価なflash-liteを優先的に探す。
+        preferred_substrings = ["flash-lite", "gemini-1.5-flash", "gemini-2.5-flash"]
+        for pref in preferred_substrings:
+            for m in models:
+                if pref in m.name:
+                    return m.name
 
         for m in models:
             if 'flash' in m.name:
                 return m.name
 
-        return "gemini-1.5-flash-latest"
+        return "gemini-2.5-flash-lite"
     except Exception:
-        return "gemini-1.5-flash"
+        return "gemini-2.5-flash-lite"
 
 
 def describe_gemini_error(e):
