@@ -4,7 +4,6 @@ import os
 import random
 import fitz  # PyMuPDF
 from PIL import Image
-import google.generativeai as genai
 from datetime import datetime, timedelta
 import re
 
@@ -369,29 +368,23 @@ def auto_tag_problem_with_ai(image_path, api_key):
         return []
 
     try:
-        genai.configure(api_key=api_key)
-        best_model_name = gemini_service.get_flash_model_name(api_key)
-        
-        model = genai.GenerativeModel(
-            model_name=best_model_name,
-            generation_config={"response_mime_type": "application/json"}
-        )
-        
         prompt = """
         この数学の入試問題の画像を見て、以下の分野リストの中から、この問題に当てはまるものをすべて選び、JSON形式の配列（文字列のリスト）として出力してください。
         必ず以下のリストにある完全一致する文字列のみを使用し、その他の言葉は含めないでください。
-        
+
         【分野リスト】
         "確率", "ベクトル", "数列", "微分・積分", "図形と方程式", "複素数平面", "極座標", "整数", "数と式", "三角関数", "指数・対数", "二次関数", "図形の性質", "場合の数", "極限", "その他", "数学Ⅲ"
-        
+
         出力例:
         ["ベクトル", "数列"]
         """
         img = Image.open(image_path)
         # APIのトークン削減と高速化のためリサイズ
         img.thumbnail((1024, 1024))
-        
-        response = model.generate_content([prompt, img])
+
+        response = gemini_service.generate_with_fallback(
+            api_key, [prompt, img], {"response_mime_type": "application/json"}
+        )
         result = json.loads(response.text)
         if isinstance(result, list):
             # リストに含まれる無効な文字列を除外
