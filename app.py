@@ -1081,10 +1081,17 @@ def main():
         level = student_data.get("level", 1)
         streak = student_data.get("login_streak", 1)
 
+        st.warning("⚠️ 学校のGoogleアカウントではGeminiが制限されているため、必ず個人のGoogleアカウントでログインして使ってね！")
+
         st.subheader("2. コピー用プロンプト")
         st.info("①下のプロンプトをコピー → ②Gemini (gemini.google.com) を開く → ③解いた問題の写真をGeminiに直接添付（このアプリへのアップロードは不要です） → ④プロンプトを貼り付けて送信 → ⑤気になる点はそのまま追加で質問できます！")
         prompt_text = gemini_service.generate_copy_prompt(mode_key, student_name, level, streak)
         rpg_ui.render_copy_prompt_box(prompt_text, key="submission")
+
+        if mode_key == "correction":
+            st.markdown("""💡 **添削が終わったら…**
+Geminiから最後に出力される『【日付】〜【今後の学習方針】』の記録をコピーして、自分の分析ノートに貼り付けよう！データが溜まると専用の復習テストが作れるようになります。""")
+            st.link_button("📋 自分の分析ノート（Google Docs）を開く", "https://docs.google.com/document/u/0/")
 
 if __name__ == "__main__":
     main()
