@@ -584,22 +584,24 @@ def main():
         st.write("有料版のGemini APIを使い、現在「未分類」となっている問題をすべて自動で判別しタグ付けします。（※1000問あたり約5.5円のコストがかかります）")
         
         unclassified_items = [item for item in db if "未分類" in item.get("topic", [])]
+        BATCH_LIMIT = 20
 
-        st.caption("💡 途中で止まっても大丈夫です。20問処理するごとに自動保存されるので、もう一度このボタンを押せば未分類の問題から再開できます。")
+        st.caption(f"💡 暴走・想定外の課金を防ぐため、1回のクリックで最大{BATCH_LIMIT}問までしか処理しません。続きをやりたい場合は、完了後にもう一度このボタンを押してください。")
 
-        if st.button(f"🚀 未分類の問題（残り {len(unclassified_items)} 問）をすべてAIで自動分類する", type="primary", disabled=len(unclassified_items) == 0):
+        if st.button(f"🚀 未分類の問題（残り {len(unclassified_items)} 問 / 今回は最大{min(BATCH_LIMIT, len(unclassified_items))}問処理）をAIで自動分類する", type="primary", disabled=len(unclassified_items) == 0):
             gemini_key = st.secrets.get("GEMINI_API_KEY", "")
             if not gemini_key:
                 st.error("APIキーが設定されていません。")
             else:
+                items_to_process = unclassified_items[:BATCH_LIMIT]
                 progress_bar = st.progress(0)
                 status_text = st.empty()
 
                 SAVE_EVERY = 20
                 success_count = 0
-                total_to_process = len(unclassified_items)
+                total_to_process = len(items_to_process)
 
-                for idx, current_item in enumerate(unclassified_items):
+                for idx, current_item in enumerate(items_to_process):
                     status_text.text(f"処理中 ({idx+1}/{total_to_process}): {current_item.get('university')} の問題をAIが確認中...")
                     img_path = os.path.join(IMG_DIR, current_item.get("image_file", ""))
 
@@ -621,7 +623,8 @@ def main():
 
                 # 最後に必ず保存する
                 save_json(DB_PATH, db)
-                status_text.success(f"🎉 自動分類が完了しました！ ({success_count}問を新しく分類しました)")
+                remaining = len(unclassified_items) - len(items_to_process)
+                status_text.success(f"🎉 今回の分類が完了しました！ ({success_count}問を新しく分類しました / 残り{remaining}問。続ける場合はもう一度ボタンを押してください)")
                 st.toast("AIによる自動分類が完了しました！", icon="🤖")
                 st.rerun()
 
@@ -631,14 +634,16 @@ def main():
         st.write("有料版のGemini APIを使い、まだ「正解」が登録されていない問題にAIが実際に解答し、「難易度」と「正解」を自動生成します。RPGバトル機能で出題するために必要な作業です。（※証明問題など、簡潔な答えにできない問題は自動的にスキップされます）")
 
         not_enriched_items = [item for item in db if not item.get("correct_answer")]
+        BATCH_LIMIT_BATTLE = 20
 
-        st.caption("💡 途中で止まっても大丈夫です。20問処理するごとに自動保存されるので、もう一度このボタンを押せば未対応の問題から再開できます。")
+        st.caption(f"💡 暴走・想定外の課金を防ぐため、1回のクリックで最大{BATCH_LIMIT_BATTLE}問までしか処理しません。続きをやりたい場合は、完了後にもう一度このボタンを押してください。")
 
-        if st.button(f"🚀 未対応の問題（残り {len(not_enriched_items)} 問）をすべてAIに解かせる", type="primary", disabled=len(not_enriched_items) == 0, key="btn_enrich_battle"):
+        if st.button(f"🚀 未対応の問題（残り {len(not_enriched_items)} 問 / 今回は最大{min(BATCH_LIMIT_BATTLE, len(not_enriched_items))}問処理）をAIに解かせる", type="primary", disabled=len(not_enriched_items) == 0, key="btn_enrich_battle"):
             gemini_key = st.secrets.get("GEMINI_API_KEY", "")
             if not gemini_key:
                 st.error("APIキーが設定されていません。")
             else:
+                items_to_process = not_enriched_items[:BATCH_LIMIT_BATTLE]
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 error_box = st.empty()
@@ -648,9 +653,9 @@ def main():
                 skipped_count = 0
                 error_count = 0
                 last_error = None
-                total_to_process = len(not_enriched_items)
+                total_to_process = len(items_to_process)
 
-                for idx, current_item in enumerate(not_enriched_items):
+                for idx, current_item in enumerate(items_to_process):
                     status_text.text(f"処理中 ({idx+1}/{total_to_process}): {current_item.get('university')} の問題をAIが解答中... (成功: {success_count}件 / スキップ: {skipped_count}件 / エラー: {error_count}件)")
                     img_path = os.path.join(IMG_DIR, current_item.get("image_file", ""))
 
@@ -682,7 +687,8 @@ def main():
 
                 # 最後に必ず保存する
                 save_json(DB_PATH, db)
-                status_text.success(f"🎉 バトル用データの生成が完了しました！ (成功: {success_count}問 / スキップ: {skipped_count}問 / エラー: {error_count}件)")
+                remaining = len(not_enriched_items) - len(items_to_process)
+                status_text.success(f"🎉 今回のバトル用データ生成が完了しました！ (成功: {success_count}問 / スキップ: {skipped_count}問 / エラー: {error_count}件 / 残り{remaining}問。続ける場合はもう一度ボタンを押してください)")
                 if error_count > 0:
                     st.error(f"⚠️ {error_count}件でエラーが発生しました。直近のエラー内容: {last_error}")
                 st.toast("バトル用データの生成が完了しました！", icon="🎮")
@@ -694,14 +700,16 @@ def main():
         st.write("有料版のGemini APIを使い、まだキーワードが登録されていない問題にAIが具体的なテーマ（例: 最大値・最小値、軌跡など）を判定して登録します。解かせるわけではないので、タグ付けと同程度の低コストです。（※1000問あたり約5.5円のコストがかかります）")
 
         no_keyword_items = [item for item in db if not item.get("keywords")]
+        BATCH_LIMIT_KEYWORDS = 20
 
-        st.caption("💡 途中で止まっても大丈夫です。20問処理するごとに自動保存されるので、もう一度このボタンを押せば未対応の問題から再開できます。")
+        st.caption(f"💡 暴走・想定外の課金を防ぐため、1回のクリックで最大{BATCH_LIMIT_KEYWORDS}問までしか処理しません。続きをやりたい場合は、完了後にもう一度このボタンを押してください。")
 
-        if st.button(f"🚀 未対応の問題（残り {len(no_keyword_items)} 問）にキーワードを自動生成する", type="primary", disabled=len(no_keyword_items) == 0, key="btn_gen_keywords"):
+        if st.button(f"🚀 未対応の問題（残り {len(no_keyword_items)} 問 / 今回は最大{min(BATCH_LIMIT_KEYWORDS, len(no_keyword_items))}問処理）にキーワードを自動生成する", type="primary", disabled=len(no_keyword_items) == 0, key="btn_gen_keywords"):
             gemini_key = st.secrets.get("GEMINI_API_KEY", "")
             if not gemini_key:
                 st.error("APIキーが設定されていません。")
             else:
+                items_to_process = no_keyword_items[:BATCH_LIMIT_KEYWORDS]
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 error_box = st.empty()
@@ -710,9 +718,9 @@ def main():
                 success_count = 0
                 error_count = 0
                 last_error = None
-                total_to_process = len(no_keyword_items)
+                total_to_process = len(items_to_process)
 
-                for idx, current_item in enumerate(no_keyword_items):
+                for idx, current_item in enumerate(items_to_process):
                     status_text.text(f"処理中 ({idx+1}/{total_to_process}): {current_item.get('university')} の問題をAIが確認中... (成功: {success_count}件 / エラー: {error_count}件)")
                     img_path = os.path.join(IMG_DIR, current_item.get("image_file", ""))
 
@@ -739,7 +747,8 @@ def main():
 
                 # 最後に必ず保存する
                 save_json(DB_PATH, db)
-                status_text.success(f"🎉 キーワード生成が完了しました！ ({success_count}問に登録しました)")
+                remaining = len(no_keyword_items) - len(items_to_process)
+                status_text.success(f"🎉 今回のキーワード生成が完了しました！ ({success_count}問に登録しました / 残り{remaining}問。続ける場合はもう一度ボタンを押してください)")
                 if error_count > 0:
                     st.error(f"⚠️ {error_count}件でエラーが発生しました。直近のエラー内容: {last_error}")
                 st.toast("キーワード生成が完了しました！", icon="🔍")
