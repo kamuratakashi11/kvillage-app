@@ -6,6 +6,20 @@ import google.generativeai as genai
 from PIL import Image
 
 
+def parse_json_lenient(text):
+    """Geminiの応答をJSONとして解釈する。response_mime_type=application/jsonを指定していても、
+    モデルが末尾に余分な閉じかっこ等を付け足すことが稀にあるため、先頭から読み取れる
+    最初のJSON値だけを取り出して許容する。"""
+    text = (text or "").strip()
+    if not text:
+        raise json.JSONDecodeError("空の応答です", text, 0)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        obj, _ = json.JSONDecoder().raw_decode(text)
+        return obj
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_flash_model_name(api_key, exclude=()):
     """APIキーに紐づく利用可能な中で、最も安価なFlash系モデルの名前を1回だけ取得し、キャッシュする。
@@ -155,7 +169,7 @@ def enrich_problem_for_battle(image_path, api_key):
         api_key, [PROBLEM_ENRICHMENT_PROMPT, img], {"response_mime_type": "application/json"}
     )
     try:
-        data = json.loads(response.text)
+        data = parse_json_lenient(response.text)
     except (json.JSONDecodeError, ValueError) as e:
         snippet = (response.text or "")[:200]
         raise RuntimeError(f"Geminiの応答がJSONとして解釈できませんでした: {e} / 応答内容: {snippet!r}") from e
@@ -202,7 +216,7 @@ def generate_search_keywords(image_path, api_key):
         api_key, [SEARCH_KEYWORD_PROMPT, img], {"response_mime_type": "application/json"}
     )
     try:
-        data = json.loads(response.text)
+        data = parse_json_lenient(response.text)
     except (json.JSONDecodeError, ValueError) as e:
         snippet = (response.text or "")[:200]
         raise RuntimeError(f"Geminiの応答がJSONとして解釈できませんでした: {e} / 応答内容: {snippet!r}") from e
@@ -251,7 +265,7 @@ def judge_battle_answer(image, correct_answer, api_key, answer_type="value"):
     response = generate_with_fallback(
         api_key, [prompt, image], {"response_mime_type": "application/json"}
     )
-    data = json.loads(response.text)
+    data = parse_json_lenient(response.text)
     return {
         "is_correct": bool(data.get("is_correct", False)),
         "extracted_answer": data.get("extracted_answer", ""),

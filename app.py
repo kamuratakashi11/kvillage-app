@@ -385,7 +385,7 @@ def auto_tag_problem_with_ai(image_path, api_key):
         response = gemini_service.generate_with_fallback(
             api_key, [prompt, img], {"response_mime_type": "application/json"}
         )
-        result = json.loads(response.text)
+        result = gemini_service.parse_json_lenient(response.text)
         if isinstance(result, list):
             # リストに含まれる無効な文字列を除外
             valid_tags = ["確率", "ベクトル", "数列", "微分・積分", "図形と方程式", "複素数平面", "極座標", "整数", "数と式", "三角関数", "指数・対数", "二次関数", "図形の性質", "場合の数", "極限", "その他", "数学Ⅲ"]
