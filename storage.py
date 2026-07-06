@@ -40,16 +40,19 @@ def init_firestore():
 db_client, db_error = init_firestore()
 
 
-def load_json(path, default_val):
-    # db.json（先生がアップロードする問題データ）はそのままローカルのファイルを読む
-    if path == DB_PATH:
-        if not os.path.exists(path):
-            return default_val
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+def _load_db_fallback(default_val):
+    """Firestoreにdb.jsonがまだ保存されていない場合、リポジトリ同梱のファイルを初期データとして使う"""
+    if not os.path.exists(DB_PATH):
+        return default_val
+    with open(DB_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-    # それ以外の生徒データはFirestoreから読む
+
+def load_json(path, default_val):
+    # db.jsonもFirestoreで永続化する（Reboot・再デプロイのたびに進捗が消えるのを防ぐため）
     if db_client is None:
+        if path == DB_PATH:
+            return _load_db_fallback(default_val)
         return default_val
 
     doc_name = os.path.basename(path).replace(".json", "")
@@ -59,6 +62,8 @@ def load_json(path, default_val):
         if doc.exists:
             data = doc.to_dict()
             return data.get("data", default_val)
+        elif path == DB_PATH:
+            return _load_db_fallback(default_val)
         else:
             return default_val
     except Exception as e:
@@ -67,13 +72,6 @@ def load_json(path, default_val):
 
 
 def save_json(path, data):
-    # db.json はローカルに上書きする（※通常アプリ稼働中はタグ付け以外で書き換えない）
-    if path == DB_PATH:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-        return
-
-    # 生徒データの書き込みはすべてFirestoreへ送る
     if db_client is None:
         st.session_state["_pending_storage_error"] = f"🚨 **DB保存エラー**: Firestoreが初期化されていません（{db_error}）"
         return
