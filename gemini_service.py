@@ -40,19 +40,34 @@ def _is_model_unavailable_error(e):
     return "404" in msg and ("no longer available" in msg or "not found" in msg)
 
 
-def generate_with_fallback(api_key, prompt_parts, generation_config, max_attempts=3):
-    """指定モデルが廃止(404)されていた場合、別のモデルに自動で切り替えて再試行する"""
-    excluded = ()
+# list_models()の動的な列挙は、APIキーによっては廃止済みモデルしか
+# 見つからず、結果的に割高な通常のFlashモデルにフォールバックしてしまう
+# ことがある。そのため、まず既知の安価なモデルIDを直接試す。
+KNOWN_CHEAP_MODEL_CANDIDATES = [
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash-lite",
+]
+
+
+def generate_with_fallback(api_key, prompt_parts, generation_config, max_attempts=4):
+    """既知の安価なモデルを直接優先的に試し、すべて失敗した場合のみ動的に候補を探して再試行する"""
+    genai.configure(api_key=api_key)
+    tried = set()
     last_error = None
+
     for _ in range(max_attempts):
-        model_name = get_flash_model_name(api_key, exclude=excluded)
-        genai.configure(api_key=api_key)
+        model_name = next((c for c in KNOWN_CHEAP_MODEL_CANDIDATES if c not in tried), None)
+        if model_name is None:
+            model_name = get_flash_model_name(api_key, exclude=tuple(tried))
+            if model_name in tried:
+                break
+
+        tried.add(model_name)
         model = genai.GenerativeModel(model_name=model_name, generation_config=generation_config)
         try:
             return model.generate_content(prompt_parts)
         except Exception as e:
-            if _is_model_unavailable_error(e) and model_name not in excluded:
-                excluded = excluded + (model_name,)
+            if _is_model_unavailable_error(e):
                 last_error = e
                 continue
             raise
