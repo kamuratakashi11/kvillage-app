@@ -134,6 +134,14 @@ NOTEBOOKLM_LOG_INSTRUCTION = """
 【解答の状況】
 【分析された弱点・思考の癖】
 【今後の学習方針】
+
+※さらに、出力の最後に生徒への労いと、以下の案内メッセージ（Markdownリンクを含む）をそのまま一言一句違わず表示してください。
+「📝 **次のステップ**：
+上のデータをコピーして、自分の分析ノートに貼り付けて今日の記録を残しましょう！
+👉 [📋 Google Docsを開く](https://docs.google.com/document/u/0/)
+
+週末はNotebookLMで復習テストを作ってみてね。
+👉 [🧠 NotebookLMを開く](https://notebooklm.google.com/)」
 ---
 """
 
