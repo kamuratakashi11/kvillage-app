@@ -125,6 +125,50 @@ def enrich_problem_for_battle(image_path, api_key):
     }
 
 
+# --- 先生用: 単元演習作成のための検索キーワード抽出（解かせずに画像だけで判定するため安価） ---
+
+SEARCH_KEYWORD_PROMPT = """あなたは高校数学の教師です。添付された入試問題の画像を見て、この問題の内容を表す具体的なキーワードを3〜5個、日本語で挙げてください。
+
+【キーワードの例】
+最大値・最小値、軌跡、反復試行の確率、漸化式、内積、面積、通過領域、接線、極限の計算、恒等式の証明 など
+
+「数と式」「二次関数」のような大きな分野名ではなく、授業で単元演習を作る先生が検索しやすい、もっと具体的な出題テーマ・設定を表す言葉にしてください。
+
+以下のJSON形式で必ず出力してください（他の文章は一切含めないこと）:
+{{
+  "keywords": ["キーワード1", "キーワード2", ...]
+}}
+"""
+
+
+def generate_search_keywords(image_path, api_key):
+    """問題画像から、先生が単元演習を検索しやすい具体的なキーワードを抽出する（解かせないため安価）"""
+    if not os.path.exists(image_path):
+        return []
+
+    genai.configure(api_key=api_key)
+    model_name = get_flash_model_name(api_key)
+    model = genai.GenerativeModel(
+        model_name=model_name,
+        generation_config={"response_mime_type": "application/json"}
+    )
+
+    img = Image.open(image_path)
+    img.thumbnail((1024, 1024))
+
+    response = model.generate_content([SEARCH_KEYWORD_PROMPT, img])
+    try:
+        data = json.loads(response.text)
+    except (json.JSONDecodeError, ValueError) as e:
+        snippet = (response.text or "")[:200]
+        raise RuntimeError(f"Geminiの応答がJSONとして解釈できませんでした: {e} / 応答内容: {snippet!r}") from e
+
+    keywords = data.get("keywords", [])
+    if not isinstance(keywords, list):
+        return []
+    return [str(k).strip() for k in keywords if str(k).strip()]
+
+
 # --- RPGバトル: 手書き解答の採点（正誤判定のみ） ---
 
 JUDGE_PROMPT_TEMPLATE = """あなたは高校数学の採点者です。添付された画像は、生徒が手書きで解いた数学の解答です。

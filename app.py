@@ -688,6 +688,63 @@ def main():
                 st.toast("バトル用データの生成が完了しました！", icon="🎮")
                 st.rerun()
 
+        # --- 💡【追加】先生用：単元演習検索のためのキーワード抽出 ---
+        st.markdown("---")
+        st.subheader("🔍 検索用キーワードの自動生成（単元演習作成用）")
+        st.write("有料版のGemini APIを使い、まだキーワードが登録されていない問題にAIが具体的なテーマ（例: 最大値・最小値、軌跡など）を判定して登録します。解かせるわけではないので、タグ付けと同程度の低コストです。（※1000問あたり約5.5円のコストがかかります）")
+
+        no_keyword_items = [item for item in db if not item.get("keywords")]
+
+        st.caption("💡 途中で止まっても大丈夫です。20問処理するごとに自動保存されるので、もう一度このボタンを押せば未対応の問題から再開できます。")
+
+        if st.button(f"🚀 未対応の問題（残り {len(no_keyword_items)} 問）にキーワードを自動生成する", type="primary", disabled=len(no_keyword_items) == 0, key="btn_gen_keywords"):
+            gemini_key = st.secrets.get("GEMINI_API_KEY", "")
+            if not gemini_key:
+                st.error("APIキーが設定されていません。")
+            else:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                error_box = st.empty()
+
+                SAVE_EVERY = 20
+                success_count = 0
+                error_count = 0
+                last_error = None
+                total_to_process = len(no_keyword_items)
+
+                for idx, current_item in enumerate(no_keyword_items):
+                    status_text.text(f"処理中 ({idx+1}/{total_to_process}): {current_item.get('university')} の問題をAIが確認中... (成功: {success_count}件 / エラー: {error_count}件)")
+                    img_path = os.path.join(IMG_DIR, current_item.get("image_file", ""))
+
+                    try:
+                        keywords = gemini_service.generate_search_keywords(img_path, gemini_key)
+                    except Exception as e:
+                        keywords = []
+                        error_count += 1
+                        last_error = str(e)
+                        error_box.error(f"直近のエラー: {last_error}")
+
+                    if keywords:
+                        for db_idx, db_item in enumerate(db):
+                            if db_item.get("image_file") == current_item.get("image_file"):
+                                db[db_idx]["keywords"] = keywords
+                                success_count += 1
+                                break
+
+                    progress_bar.progress((idx + 1) / total_to_process)
+
+                    # 途中経過をこまめに保存し、中断してもここまでの結果が失われないようにする
+                    if (idx + 1) % SAVE_EVERY == 0:
+                        save_json(DB_PATH, db)
+
+                # 最後に必ず保存する
+                save_json(DB_PATH, db)
+                status_text.success(f"🎉 キーワード生成が完了しました！ ({success_count}問に登録しました)")
+                if error_count > 0:
+                    st.error(f"⚠️ {error_count}件でエラーが発生しました。直近のエラー内容: {last_error}")
+                st.toast("キーワード生成が完了しました！", icon="🔍")
+                st.rerun()
+
         st.markdown("---")
         st.subheader("✍️ 個別での確認・修正")
         
