@@ -747,6 +747,50 @@ def main():
                 st.toast("キーワード生成が完了しました！", icon="🔍")
                 st.rerun()
 
+        # --- 💡【追加】生成したキーワードで問題を検索し、単元演習プリントを作成 ---
+        st.markdown("---")
+        st.subheader("📖 キーワードで単元演習プリントを作成")
+        st.write("登録済みのキーワードでテーマ（例: 最大値・最小値、軌跡など）を検索し、大学を問わず同じテーマの問題だけを集めたプリントを作成できます。")
+
+        all_keywords = sorted({kw for item in db for kw in item.get("keywords", [])})
+
+        if not all_keywords:
+            st.info("まだキーワードが登録された問題がありません。上のボタンでキーワードを自動生成してください。")
+        else:
+            selected_keywords = st.multiselect("検索するテーマ（キーワード）を選択（複数可）", all_keywords, key="keyword_search_select")
+
+            if selected_keywords:
+                matched_items = [item for item in db if any(kw in item.get("keywords", []) for kw in selected_keywords)]
+                st.write(f"※該当する問題数: **{len(matched_items)}問**")
+
+                if not matched_items:
+                    st.warning("該当する問題が見つかりませんでした。")
+                else:
+                    max_num = len(matched_items)
+                    num_q_kw = st.slider("プリントに含める問題数", min_value=1, max_value=max_num, value=min(10, max_num), key="keyword_search_num")
+
+                    if st.button("📄 このテーマでプリントを作成する", type="primary", key="btn_gen_keyword_pdf"):
+                        with st.spinner("PDFを生成中..."):
+                            selected_items = random.sample(matched_items, num_q_kw)
+                            out_doc = fitz.open()
+                            for item in selected_items:
+                                img_path = os.path.join(IMG_DIR, item.get("image_file", ""))
+                                if os.path.exists(img_path):
+                                    img_doc = fitz.open(img_path)
+                                    pdf_bytes = img_doc.convert_to_pdf()
+                                    img_pdf = fitz.open("pdf", pdf_bytes)
+                                    out_doc.insert_pdf(img_pdf)
+                            pdf_data = out_doc.write()
+
+                        st.success(f"「{'、'.join(selected_keywords)}」の問題を {num_q_kw}問 集めたプリントを作成しました！")
+                        st.download_button(
+                            label="📥 PDFをダウンロード",
+                            data=pdf_data,
+                            file_name=f"単元演習_{'_'.join(selected_keywords)}.pdf",
+                            mime="application/pdf",
+                            key="dl_keyword_pdf"
+                        )
+
         st.markdown("---")
         st.subheader("✍️ 個別での確認・修正")
         
