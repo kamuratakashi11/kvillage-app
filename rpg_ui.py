@@ -219,7 +219,7 @@ def render_battle(unit_id, student_id, student_name, api_key):
         return
 
     if player_hp <= 0:
-        st.error("💥 やられてしまった...もう一度チケットを使って挑み直そう！")
+        st.error("💥 やられてしまった...最初からやり直して挑み直そう！")
         if st.button("🔄 最初からやり直す"):
             _reset_battle_session()
             st.session_state[player_hp_key] = rpg_data.PLAYER_MAX_HP
