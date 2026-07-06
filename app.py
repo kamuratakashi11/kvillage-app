@@ -670,6 +670,7 @@ def main():
                             if db_item.get("image_file") == current_item.get("image_file"):
                                 db[db_idx]["difficulty"] = result["difficulty"]
                                 db[db_idx]["correct_answer"] = result["correct_answer"]
+                                db[db_idx]["method_summary"] = result["method_summary"]
                                 success_count += 1
                                 break
 
