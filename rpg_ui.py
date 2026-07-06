@@ -309,7 +309,7 @@ def render_battle(unit_id, student_id, student_name, api_key):
                         results = []
                         with st.spinner(f"敵が{len(pairs)}問の解答を確認中..."):
                             for problem, image in pairs:
-                                results.append(gemini_service.judge_battle_answer(image, problem["correct_answer"], api_key))
+                                results.append(gemini_service.judge_battle_answer(image, problem["correct_answer"], api_key, problem.get("answer_type", "value")))
                         st.session_state[results_key] = results
 
                         total_damage = sum(
@@ -343,7 +343,7 @@ def render_battle(unit_id, student_id, student_name, api_key):
                 review_flag_key = f"{reviews_prefix}{i}"
                 if st.button(f"📖 第{i+1}問をくわしく添削してほしい", key=f"review_btn_{unit_id}_{i}"):
                     st.session_state[review_flag_key] = gemini_service.generate_battle_review_prompt(
-                        unit_topic_name, problem["correct_answer"]
+                        unit_topic_name, problem["correct_answer"], problem.get("answer_type", "value")
                     )
 
                 if review_flag_key in st.session_state:

@@ -385,7 +385,7 @@ def auto_tag_problem_with_ai(image_path, api_key):
         response = gemini_service.generate_with_fallback(
             api_key, [prompt, img], {"response_mime_type": "application/json"}
         )
-        result = json.loads(response.text)
+        result = gemini_service.parse_json_lenient(response.text)
         if isinstance(result, list):
             # リストに含まれる無効な文字列を除外
             valid_tags = ["確率", "ベクトル", "数列", "微分・積分", "図形と方程式", "複素数平面", "極座標", "整数", "数と式", "三角関数", "指数・対数", "二次関数", "図形の性質", "場合の数", "極限", "その他", "数学Ⅲ"]
@@ -624,7 +624,7 @@ def main():
         # --- 💡【追加】RPGバトル用データ（難易度・正解）の自動生成 ---
         st.markdown("---")
         st.subheader("🎮 バトル用データの自動生成（難易度・正解）")
-        st.write("有料版のGemini APIを使い、まだ「正解」が登録されていない問題にAIが実際に解答し、「難易度」と「正解」を自動生成します。RPGバトル機能で出題するために必要な作業です。（※証明問題など、簡潔な答えにできない問題は自動的にスキップされます）")
+        st.write("有料版のGemini APIを使い、まだ「正解」が登録されていない問題にAIが実際に解答し、「難易度」と「正解」を自動生成します。RPGバトル機能で出題するために必要な作業です。（※証明問題の場合は、証明で示すべき結論と採点基準をAIがまとめて登録し、それをもとに手書きの証明を採点します）")
 
         not_enriched_items = [item for item in db if not item.get("correct_answer")]
         BATCH_LIMIT_BATTLE = 20
@@ -668,6 +668,7 @@ def main():
                             if db_item.get("image_file") == current_item.get("image_file"):
                                 db[db_idx]["difficulty"] = result["difficulty"]
                                 db[db_idx]["correct_answer"] = result["correct_answer"]
+                                db[db_idx]["answer_type"] = result["answer_type"]
                                 db[db_idx]["method_summary"] = result["method_summary"]
                                 success_count += 1
                                 break
@@ -746,6 +747,50 @@ def main():
                     st.error(f"⚠️ {error_count}件でエラーが発生しました。直近のエラー内容: {last_error}")
                 st.toast("キーワード生成が完了しました！", icon="🔍")
                 st.rerun()
+
+        # --- 💡【追加】生成したキーワードで問題を検索し、単元演習プリントを作成 ---
+        st.markdown("---")
+        st.subheader("📖 キーワードで単元演習プリントを作成")
+        st.write("登録済みのキーワードでテーマ（例: 最大値・最小値、軌跡など）を検索し、大学を問わず同じテーマの問題だけを集めたプリントを作成できます。")
+
+        all_keywords = sorted({kw for item in db for kw in item.get("keywords", [])})
+
+        if not all_keywords:
+            st.info("まだキーワードが登録された問題がありません。上のボタンでキーワードを自動生成してください。")
+        else:
+            selected_keywords = st.multiselect("検索するテーマ（キーワード）を選択（複数可）", all_keywords, key="keyword_search_select")
+
+            if selected_keywords:
+                matched_items = [item for item in db if any(kw in item.get("keywords", []) for kw in selected_keywords)]
+                st.write(f"※該当する問題数: **{len(matched_items)}問**")
+
+                if not matched_items:
+                    st.warning("該当する問題が見つかりませんでした。")
+                else:
+                    max_num = len(matched_items)
+                    num_q_kw = st.slider("プリントに含める問題数", min_value=1, max_value=max_num, value=min(10, max_num), key="keyword_search_num")
+
+                    if st.button("📄 このテーマでプリントを作成する", type="primary", key="btn_gen_keyword_pdf"):
+                        with st.spinner("PDFを生成中..."):
+                            selected_items = random.sample(matched_items, num_q_kw)
+                            out_doc = fitz.open()
+                            for item in selected_items:
+                                img_path = os.path.join(IMG_DIR, item.get("image_file", ""))
+                                if os.path.exists(img_path):
+                                    img_doc = fitz.open(img_path)
+                                    pdf_bytes = img_doc.convert_to_pdf()
+                                    img_pdf = fitz.open("pdf", pdf_bytes)
+                                    out_doc.insert_pdf(img_pdf)
+                            pdf_data = out_doc.write()
+
+                        st.success(f"「{'、'.join(selected_keywords)}」の問題を {num_q_kw}問 集めたプリントを作成しました！")
+                        st.download_button(
+                            label="📥 PDFをダウンロード",
+                            data=pdf_data,
+                            file_name=f"単元演習_{'_'.join(selected_keywords)}.pdf",
+                            mime="application/pdf",
+                            key="dl_keyword_pdf"
+                        )
 
         st.markdown("---")
         st.subheader("✍️ 個別での確認・修正")
