@@ -577,7 +577,7 @@ def main():
         st.write("有料版のGemini APIを使い、現在「未分類」となっている問題をすべて自動で判別しタグ付けします。（※1000問あたり約5.5円のコストがかかります）")
         
         unclassified_items = [item for item in db if "未分類" in item.get("topic", [])]
-        BATCH_LIMIT = 20
+        BATCH_LIMIT = 100
 
         st.caption(f"💡 暴走・想定外の課金を防ぐため、1回のクリックで最大{BATCH_LIMIT}問までしか処理しません。続きをやりたい場合は、完了後にもう一度このボタンを押してください。")
 
@@ -627,7 +627,7 @@ def main():
         st.write("有料版のGemini APIを使い、まだ「正解」が登録されていない問題にAIが実際に解答し、「難易度」と「正解」を自動生成します。RPGバトル機能で出題するために必要な作業です。（※証明問題の場合は、証明で示すべき結論と採点基準をAIがまとめて登録し、それをもとに手書きの証明を採点します）")
 
         not_enriched_items = [item for item in db if not item.get("correct_answer")]
-        BATCH_LIMIT_BATTLE = 20
+        BATCH_LIMIT_BATTLE = 100
 
         st.caption(f"💡 暴走・想定外の課金を防ぐため、1回のクリックで最大{BATCH_LIMIT_BATTLE}問までしか処理しません。続きをやりたい場合は、完了後にもう一度このボタンを押してください。")
 
@@ -694,7 +694,7 @@ def main():
         st.write("有料版のGemini APIを使い、まだキーワードが登録されていない問題にAIが具体的なテーマ（例: 最大値・最小値、軌跡など）を判定して登録します。解かせるわけではないので、タグ付けと同程度の低コストです。（※1000問あたり約5.5円のコストがかかります）")
 
         no_keyword_items = [item for item in db if not item.get("keywords")]
-        BATCH_LIMIT_KEYWORDS = 20
+        BATCH_LIMIT_KEYWORDS = 100
 
         st.caption(f"💡 暴走・想定外の課金を防ぐため、1回のクリックで最大{BATCH_LIMIT_KEYWORDS}問までしか処理しません。続きをやりたい場合は、完了後にもう一度このボタンを押してください。")
 
