@@ -133,6 +133,7 @@ def _to_battle_problem(item):
     return {
         "image_file": item["image_file"],
         "correct_answer": item["correct_answer"],
+        "answer_type": item.get("answer_type", "value"),
         "difficulty": difficulty,
         "exp_value": DIFFICULTY_EXP.get(difficulty, 25),
     }

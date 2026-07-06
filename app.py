@@ -624,7 +624,7 @@ def main():
         # --- 💡【追加】RPGバトル用データ（難易度・正解）の自動生成 ---
         st.markdown("---")
         st.subheader("🎮 バトル用データの自動生成（難易度・正解）")
-        st.write("有料版のGemini APIを使い、まだ「正解」が登録されていない問題にAIが実際に解答し、「難易度」と「正解」を自動生成します。RPGバトル機能で出題するために必要な作業です。（※証明問題など、簡潔な答えにできない問題は自動的にスキップされます）")
+        st.write("有料版のGemini APIを使い、まだ「正解」が登録されていない問題にAIが実際に解答し、「難易度」と「正解」を自動生成します。RPGバトル機能で出題するために必要な作業です。（※証明問題の場合は、証明で示すべき結論と採点基準をAIがまとめて登録し、それをもとに手書きの証明を採点します）")
 
         not_enriched_items = [item for item in db if not item.get("correct_answer")]
         BATCH_LIMIT_BATTLE = 20
@@ -668,6 +668,7 @@ def main():
                             if db_item.get("image_file") == current_item.get("image_file"):
                                 db[db_idx]["difficulty"] = result["difficulty"]
                                 db[db_idx]["correct_answer"] = result["correct_answer"]
+                                db[db_idx]["answer_type"] = result["answer_type"]
                                 db[db_idx]["method_summary"] = result["method_summary"]
                                 success_count += 1
                                 break
