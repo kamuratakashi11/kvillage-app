@@ -283,6 +283,158 @@ def detect_markers(pdf_path, start_page, end_page, prefix_letters,
     return markers
 
 
+# ---------------------------------------------------------------------------
+# 1.5 大問見出しの自動検出（ページ範囲・見出し文字を先生が入力しなくても済むようにする）
+# ---------------------------------------------------------------------------
+# 「数学Ｘ　問題　（100分）」のように、科目名＋"問題"＋制限時間(N分)の組み合わせは
+# 模試の問題冊子ページに特有の見出しで、解答・解説ページには出現しない。
+# これを手がかりに、PDF全体から「問題冊子が始まるページ」だけを高速に絞り込む。
+BOOKLET_HEADER_RE = re.compile(r'問\s*題.{0,15}分\s*）')
+
+# 大問見出しの先頭文字（例:「X」）を推定するためのフォールバック用パターン。
+# どの模試でも「大問1」は必ず存在するので、ページ冒頭付近で
+# 「英字1文字 + (全角/半角の)1」という並びを探せば、その英字が見出し文字だと推定できる。
+FIRST_DAIMON_RE = re.compile(r'([A-Zａ-ｚ])\s?[1１]\b')
+
+
+def _find_booklet_start_pages(pdf_path):
+    """
+    PDF全体を高速にテキストスキャンし、「問題冊子が始まっていそうなページ」の
+    候補を返す。pdfplumberの単語座標解析(_page_is_scannedやfont計測)より
+    軽量な処理（テキスト抽出+正規表現のみ）なので、数百ページのPDFでも
+    数十秒程度で終わる。
+
+    戻り値: 候補ページ番号のリスト（重複あり得る・未ソートではない昇順）
+    """
+    from pypdf import PdfReader
+    reader = PdfReader(pdf_path)
+    hits = []
+    for i in range(len(reader.pages)):
+        text = reader.pages[i].extract_text() or ""
+        if BOOKLET_HEADER_RE.search(text):
+            hits.append(i + 1)
+    return hits
+
+
+def _cluster_pages(pages, max_gap=3):
+    """
+    近接するページ番号（差がmax_gap以下）を1つのクラスタにまとめ、
+    各クラスタの先頭ページのリストを返す。
+    同じ問題冊子の見出しが複数ページに渡って(誤)検出された場合の重複を防ぐ。
+    """
+    if not pages:
+        return []
+    pages = sorted(set(pages))
+    clusters = [[pages[0]]]
+    for p in pages[1:]:
+        if p - clusters[-1][-1] <= max_gap:
+            clusters[-1].append(p)
+        else:
+            clusters.append([p])
+    return [c[0] for c in clusters]
+
+
+def _guess_prefix_letter(plumber_page, min_abs_height=13.0, min_body_ratio=1.3):
+    """
+    そのページの中から大問見出しの先頭文字（例:"X"）を推定する。
+    1) まずフォントサイズ・座標をもとに、本文より明確に大きい文字＋直後の数字、
+       という組み合わせを探す（きれいなレイアウトのPDFで有効）。
+    2) 見つからない場合（フォント計測が乱れているスキャン起因のページ等）は、
+       ページ先頭付近のテキストから「英字+1」という並びを正規表現で探す
+       フォールバックを使う（大問1は必ず存在するという前提を利用）。
+    """
+    words = plumber_page.extract_words()
+    if words:
+        heights = [w['height'] for w in words]
+        from collections import Counter
+        body_h = Counter([round(h, 1) for h in heights]).most_common(1)[0][0]
+        threshold = max(body_h * min_body_ratio, min_abs_height)
+        for i, w in enumerate(words):
+            if w['height'] < threshold:
+                continue
+            if i + 1 >= len(words):
+                continue
+            nxt = words[i + 1]
+            if re.fullmatch(r'[0-9０-９]{1,3}', nxt['text']) and abs(nxt['top'] - w['top']) <= 3:
+                return w['text']
+
+    # フォールバック: ページ冒頭のテキストから「英字+1」を正規表現で探す
+    text = plumber_page.extract_text() or ""
+    m = FIRST_DAIMON_RE.search(text[:400])
+    if m:
+        return m.group(1).upper()
+    return None
+
+
+def auto_detect_subject_configs(pdf_path, scan_start=1, scan_end=None):
+    """
+    PDF全体（または指定範囲）を自動スキャンし、先生がページ範囲・大問見出しの
+    文字を一切指定しなくても subject_configs（ingest_pdf()にそのまま渡せる形）
+    を生成する。
+
+    手順:
+      1. 「科目名＋問題＋(N分)」という、問題冊子ページに特有の見出しパターンで
+         全ページを高速スキャンし、候補ページを絞り込む（解答・解説ページは
+         このパターンを含まないため、ここで自然に除外される）。
+      2. 近接する候補ページを1つの「問題冊子の開始点」としてクラスタリングする。
+      3. 各開始点について、大問見出しの先頭文字（X/Y/Zなど）を推定する。
+      4. 開始点を出現順に並べ、次の開始点の直前までをその科目の範囲とする。
+
+    scan_start / scan_end: 全体は遅くて困る場合のみ範囲を絞るための引数
+                            （通常は指定不要。省略時はPDF全体を対象にする）。
+
+    戻り値: [
+        {"start_page": int, "end_page": int, "letters": {prefix,},
+         "label_prefix": f"{prefix}_"},
+        ...
+    ]  （開始ページ順にソート済み）
+    候補が1つも見つからなかった場合は空リストを返す（＝手動設定が必要）。
+
+    注意: 同じ模試が複数回分・複数編集（問題冊子版、解答一体版など）で
+    まとまったPDFの場合、同じ大問が複数回検出されることがある。これは
+    「取りこぼしよりは重複の方が安全（プレビューで消せる）」という考え方に
+    基づく意図的な仕様。
+    """
+    with pdfplumber.open(pdf_path) as pdf:
+        total_pages = len(pdf.pages)
+        if scan_end is None:
+            scan_end = total_pages
+        scan_end = min(scan_end, total_pages)
+
+    raw_hits = [p for p in _find_booklet_start_pages(pdf_path) if scan_start <= p <= scan_end]
+    if not raw_hits:
+        return []
+
+    start_pages = _cluster_pages(raw_hits, max_gap=3)
+
+    with pdfplumber.open(pdf_path) as pdf:
+        entries = []  # (start_page, prefix)
+        for sp in start_pages:
+            prefix = _guess_prefix_letter(pdf.pages[sp - 1])
+            if prefix:
+                entries.append((sp, prefix))
+
+    if not entries:
+        return []
+
+    entries.sort(key=lambda e: e[0])
+    MAX_BOOKLET_SPAN = 30  # 1科目の問題冊子が現実的に取りうる最大ページ数の目安
+    subject_configs = []
+    for idx, (sp, prefix) in enumerate(entries):
+        if idx + 1 < len(entries):
+            end_p = min(entries[idx + 1][0] - 1, sp + MAX_BOOKLET_SPAN)
+        else:
+            end_p = min(sp + 10, scan_end)  # 最後は計算用紙等を見込んで少し余分に含める
+        subject_configs.append({
+            "start_page": sp,
+            "end_page": end_p,
+            "letters": {prefix},
+            "label_prefix": f"{prefix}_",
+        })
+
+    return subject_configs
+
+
 INSTRUCTION_HEADER_RE = re.compile(r'^【.+?】')
 
 
@@ -570,7 +722,7 @@ def ingest_pdf(pdf_path, university, source_pdf_name, subject_configs,
 STREAMLIT_UI_SNIPPET = '''
 st.markdown("---")
 st.subheader("📥 模試PDFの自動取り込み・大問分割・タグ付け")
-st.write("模試のPDFをアップロードすると、大問ごとに画像を切り出し、分野・単元・キーワードを自動判定してデータベースに登録します（既定ではAPIを使わない無料判定です）。")
+st.write("模試のPDFをアップロードするだけで、大問ごとに画像を切り出し、分野・単元・キーワードを自動判定してデータベースに登録します（既定ではAPIを使わない無料判定です）。ページ範囲や大問見出しの文字を指定する必要はありません。")
 
 import pdf_ingestion
 
@@ -584,34 +736,58 @@ if uploaded_pdf:
     )
     university_name = st.text_input("大学名・模試名（例: 2025ベネッセ模試）", key="ingest_univ")
 
-    st.write("科目ごとの設定（ページ番号はPDF全体の通し番号、大問見出しの文字を指定してください）")
-    num_subjects = st.number_input("設定する科目数", min_value=1, max_value=5, value=1, key="ingest_num_subj")
-
-    subject_configs = []
-    for i in range(int(num_subjects)):
-        with st.expander(f"科目 {i+1}", expanded=True):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                sp = st.number_input("開始ページ", min_value=1, value=1, key=f"ingest_sp_{i}")
-            with c2:
-                ep = st.number_input("終了ページ", min_value=1, value=1, key=f"ingest_ep_{i}")
-            with c3:
-                letters = st.text_input("大問見出しの文字（例: X）", value="X", key=f"ingest_letters_{i}")
-            subject_configs.append({
-                "start_page": int(sp), "end_page": int(ep),
-                "letters": set(letters), "label_prefix": f"{letters}_",
-            })
+    tmp_pdf_path = os.path.join(BASE_DIR, f"_tmp_ingest_{uploaded_pdf.name}")
+    with open(tmp_pdf_path, "wb") as f:
+        f.write(uploaded_pdf.getbuffer())
 
     use_ai_fallback = st.checkbox(
         "ルールベースで自信が持てない問題だけAIに判定させる（APIコストが発生します）",
         value=False, key="ingest_use_ai"
     )
 
-    if st.button("🔍 プレビュー生成（まだ保存しない）", key="ingest_preview_btn"):
-        tmp_pdf_path = os.path.join(BASE_DIR, f"_tmp_ingest_{uploaded_pdf.name}")
-        with open(tmp_pdf_path, "wb") as f:
-            f.write(uploaded_pdf.getbuffer())
+    if st.button("🔍 大問を自動検出する", key="ingest_autodetect_btn", type="primary"):
+        with st.spinner("PDF全体をスキャンして問題冊子を探しています（数百ページある場合は1分ほどかかります）..."):
+            detected = pdf_ingestion.auto_detect_subject_configs(tmp_pdf_path)
+        st.session_state["ingest_detected_configs"] = detected
+        if not detected:
+            st.warning(
+                "大問の見出しを自動検出できませんでした。"
+                "下の「手動で設定する」から開始/終了ページと見出し文字を直接指定してください。"
+            )
+        else:
+            st.success(f"{len(detected)}件の問題冊子を検出しました。内容を確認してください。")
 
+    subject_configs = []
+
+    if st.session_state.get("ingest_detected_configs"):
+        st.markdown("#### 検出結果の確認")
+        st.caption("同じ問題が複数の版（問題冊子・解答一体版など）で重複して検出されることがあります。不要なものはチェックを外してください。")
+        for i, cfg in enumerate(st.session_state["ingest_detected_configs"]):
+            prefix = next(iter(cfg["letters"]))
+            use_this = st.checkbox(
+                f"見出し「{prefix}」: {cfg['start_page']}〜{cfg['end_page']}ページ",
+                value=True, key=f"use_detected_{i}"
+            )
+            if use_this:
+                subject_configs.append(cfg)
+
+    with st.expander("自動検出がうまくいかない場合: 手動で設定する"):
+        num_subjects = st.number_input("設定する科目数", min_value=0, max_value=5, value=0, key="ingest_num_subj")
+        for i in range(int(num_subjects)):
+            with st.expander(f"科目 {i+1}", expanded=True):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    sp = st.number_input("開始ページ", min_value=1, value=1, key=f"ingest_sp_{i}")
+                with c2:
+                    ep = st.number_input("終了ページ", min_value=1, value=1, key=f"ingest_ep_{i}")
+                with c3:
+                    letters = st.text_input("大問見出しの文字（例: X）", value="X", key=f"ingest_letters_{i}")
+                subject_configs.append({
+                    "start_page": int(sp), "end_page": int(ep),
+                    "letters": set(letters), "label_prefix": f"{letters}_",
+                })
+
+    if subject_configs and st.button("📸 プレビュー生成（まだ保存しない）", key="ingest_preview_btn"):
         gemini_key = st.secrets.get("GEMINI_API_KEY", "") if use_ai_fallback else None
         db = load_json(DB_PATH, [])
 
@@ -639,6 +815,7 @@ if uploaded_pdf:
         )
 
     if st.session_state.get("ingest_preview_items"):
+        st.markdown("#### 内容の確認")
         for item in st.session_state["ingest_preview_items"]:
             col1, col2 = st.columns([1, 2])
             with col1:
@@ -650,7 +827,7 @@ if uploaded_pdf:
                 st.write(f"**単元**: {', '.join(item['unit']) if item['unit'] else '(未判定)'}")
                 st.write(f"**キーワード**: {', '.join(item['keywords'])}")
                 st.caption(f"判定方法: {item['classify_method']}")
-                if item["classify_method"] == "rule_low_confidence":
+                if item["classify_method"] in ("rule_low_confidence",) or item["subject"] == "未分類":
                     new_subject = st.selectbox(
                         "分野を修正", pdf_ingestion.ALL_SUBJECTS,
                         index=pdf_ingestion.ALL_SUBJECTS.index(item["subject"]) if item["subject"] in pdf_ingestion.ALL_SUBJECTS else 0,
@@ -664,6 +841,7 @@ if uploaded_pdf:
             db.extend(st.session_state["ingest_preview_items"])
             save_json(DB_PATH, db)
             st.session_state["ingest_preview_items"] = None
+            st.session_state["ingest_detected_configs"] = None
             st.success("データベースに保存しました！")
             st.rerun()
 '''
