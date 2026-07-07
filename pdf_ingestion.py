@@ -492,7 +492,7 @@ def classify_problem_hybrid(image_path, text, api_key=None,
 # 4. 取り込みオーケストレーション（PDF -> 画像 -> 分野/単元判定 -> db.json追記）
 # ---------------------------------------------------------------------------
 def ingest_pdf(pdf_path, university, source_pdf_name, subject_configs,
-               db, img_dir, api_key=None, confidence_threshold=0.5, dry_run=False):
+               db, img_dir, category="模試", api_key=None, confidence_threshold=0.5, dry_run=False):
     """
     subject_configs: [
         {
@@ -503,6 +503,8 @@ def ingest_pdf(pdf_path, university, source_pdf_name, subject_configs,
         ...
     ]
     db: 既存の db.json をロードしたリスト（呼び出し側で load_json(DB_PATH, []) しておく）
+    category: この問題データの出題範囲区分（"教科書"/"問題集"/"模試"/"入試" のいずれか）。
+              分野・単元の判定より前に、どの区分の問題として登録するかを表す。
     api_key: Gemini APIキー。None（既定）ならルールベースのみで判定し、APIは一切呼ばない＝無料。
              指定した場合のみ、ルールベースの自信度が低い問題だけAPIにフォールバックする。
     dry_run: True の場合、画像生成・判定のみ行い db には追記しない（プレビュー確認用）
@@ -543,6 +545,7 @@ def ingest_pdf(pdf_path, university, source_pdf_name, subject_configs,
 
             item = {
                 "image_file": img_info["image_file"],
+                "category": category,
                 "university": university,
                 "source_pdf": source_pdf_name,
                 "page": img_info["pages"][0],
@@ -574,6 +577,11 @@ import pdf_ingestion
 uploaded_pdf = st.file_uploader("模試PDFをアップロード", type=["pdf"], key="ingest_pdf_uploader")
 
 if uploaded_pdf:
+    ingest_category = st.selectbox(
+        "出題範囲（どのダンジョン・分類の問題として登録するか）",
+        ["模試", "教科書", "問題集", "入試"],
+        index=0, key="ingest_category"
+    )
     university_name = st.text_input("大学名・模試名（例: 2025ベネッセ模試）", key="ingest_univ")
 
     st.write("科目ごとの設定（ページ番号はPDF全体の通し番号、大問見出しの文字を指定してください）")
@@ -615,6 +623,7 @@ if uploaded_pdf:
                 subject_configs=subject_configs,
                 db=db,
                 img_dir=IMG_DIR,
+                category=ingest_category,
                 api_key=gemini_key,
                 dry_run=True,
             )
@@ -635,6 +644,7 @@ if uploaded_pdf:
             with col1:
                 st.image(os.path.join(IMG_DIR, item["image_file"]), use_container_width=True)
             with col2:
+                st.write(f"**出題範囲**: {item['category']}")
                 st.write(f"**大問**: {item['daimon_label']}")
                 st.write(f"**分野**: {item['subject']}")
                 st.write(f"**単元**: {', '.join(item['unit']) if item['unit'] else '(未判定)'}")
