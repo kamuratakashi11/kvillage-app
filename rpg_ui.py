@@ -40,78 +40,117 @@ def render_copy_prompt_box(prompt_text, key):
     """, height=60)
 
 
-def _map_tile_html(unit, unlocked, defeated):
-    status_class = "unlocked" if unlocked else "locked"
-    icon = unit["icon"] if unlocked else "🔒"
-    badge = f'<div class="badge">撃破 {defeated}回</div>' if unlocked and defeated > 0 else ""
+def _map_tile_html(icon, name, status_class, badge=""):
     return f"""
     <div class="tile {status_class}">
         <div class="icon">{icon}</div>
-        <div class="name">{unit['name']}</div>
+        <div class="name">{name}</div>
         {badge}
     </div>"""
 
 
+_MAP_STYLE = """
+<style>
+    body { margin:0; padding:0; background: transparent; font-family: 'Hiragino Kaku Gothic ProN','Hiragino Sans',Meiryo,sans-serif; }
+    .grid { display:flex; flex-wrap:wrap; gap:14px; padding:10px; }
+    .tile { width:120px; height:120px; border-radius:14px; display:flex; flex-direction:column; align-items:center; justify-content:center;
+             text-decoration:none; color:#fff; text-align:center; position:relative; box-shadow: 0 4px 10px rgba(0,0,0,0.4); }
+    .tile.unlocked { background: linear-gradient(145deg, #7a0d0d, #b21010); border: 2px solid #ff4b4b; }
+    .tile.locked { background: #2b2b2b; border: 2px solid #555; color:#888; }
+    .tile.boss { width:150px; height:150px; background: linear-gradient(145deg, #3a0303, #7a0d0d); border: 3px solid gold; }
+    .tile.boss.defeated { background:#333; border-color:#888; }
+    .icon { font-size:36px; }
+    .name { font-size:13px; margin-top:6px; font-weight:bold; }
+    .badge { font-size:10px; margin-top:4px; background:rgba(0,0,0,0.4); padding:2px 6px; border-radius:8px; }
+</style>
+"""
+
+
 def render_map(student_id, student_name):
     st.title("🗺️ 数学冒険マップ")
+
+    selected_category = st.query_params.get("dungeon")
+    if selected_category not in rpg_data.CATEGORY_MAP:
+        selected_category = None
+
+    if not selected_category:
+        _render_dungeon_selector(student_id)
+    else:
+        _render_dungeon_map(student_id, student_name, selected_category)
+
+
+def _render_dungeon_selector(student_id):
+    st.write("挑戦するダンジョン（出題範囲）を選ぼう！ダンジョンごとに撃破状況・レベル解放は別々に管理されます。")
+
+    student = rpg_data.load_student_with_rpg_fields(student_id)
+
+    tiles_html = ""
+    for cat in rpg_data.CATEGORIES:
+        dp = student["dungeon_progress"][cat["id"]]
+        defeated_units = sum(1 for v in dp["field_progress"].values() if v.get("defeated", 0) > 0)
+        total_units = len(cat["units"])
+        badge = f'<div class="badge">{defeated_units}/{total_units} 分野撃破</div>'
+        if dp["boss_defeated"]:
+            badge = '<div class="badge">🏆 制覇済み</div>'
+        tiles_html += _map_tile_html(cat["icon"], cat["name"], "unlocked", badge)
+
+    map_html = f"<html><head>{_MAP_STYLE}</head><body><div class=\"grid\">{tiles_html}</div></body></html>"
+    components.html(map_html, height=180, scrolling=True)
+
+    st.markdown("---")
+    options = {f"{cat['icon']} {cat['name']}": cat["id"] for cat in rpg_data.CATEGORIES}
+    choice = st.selectbox("挑戦するダンジョンを選ぶ", list(options.keys()))
+    if st.button("このダンジョンに入る", type="primary"):
+        st.query_params["dungeon"] = options[choice]
+        st.rerun()
+
+
+def _render_dungeon_map(student_id, student_name, category_id):
+    cat = rpg_data.CATEGORY_MAP[category_id]
+
+    if st.button("⬅️ ダンジョン選択に戻る"):
+        del st.query_params["dungeon"]
+        st.rerun()
+
+    st.subheader(f"{cat['icon']} {cat['name']}")
     st.write("フィールドを選んで敵と戦い、経験値を稼ごう！撃破すると隣のフィールドが解放されます。")
 
     student = rpg_data.load_student_with_rpg_fields(student_id)
-    field_progress = student["field_progress"]
-    boss_unlocked = rpg_data.is_boss_unlocked(field_progress)
-    boss_defeated = student.get("boss_defeated", False)
-    title = student.get("title")
+    dp = student["dungeon_progress"][category_id]
+    field_progress = dp["field_progress"]
+    boss_unlocked = rpg_data.is_boss_unlocked(category_id, field_progress)
+    boss_defeated = dp["boss_defeated"]
+    title = dp["title"]
 
     if title:
         st.success(f"🏆 称号「{title}」を獲得しています！")
 
     tiles_html = "".join(
-        _map_tile_html(unit, rpg_data.is_unit_unlocked(unit, field_progress), field_progress.get(unit["id"], {}).get("defeated", 0))
-        for unit in rpg_data.UNITS
+        _map_tile_html(
+            unit["icon"] if rpg_data.is_unit_unlocked(category_id, unit, field_progress) else "🔒",
+            unit["name"],
+            "unlocked" if rpg_data.is_unit_unlocked(category_id, unit, field_progress) else "locked",
+            f'<div class="badge">撃破 {field_progress.get(unit["id"], {}).get("defeated", 0)}回</div>'
+            if rpg_data.is_unit_unlocked(category_id, unit, field_progress) and field_progress.get(unit["id"], {}).get("defeated", 0) > 0
+            else "",
+        )
+        for unit in cat["units"]
     )
 
-    boss = rpg_data.FINAL_BOSS
+    boss = cat["final_boss"]
     if boss_defeated:
-        tiles_html += f"""
-        <div class="tile boss defeated">
-            <div class="icon">{boss['icon']}</div>
-            <div class="name">{boss['name']}</div>
-            <div class="badge">撃破済み</div>
-        </div>"""
+        tiles_html += _map_tile_html(boss["icon"], boss["name"], "boss defeated", '<div class="badge">撃破済み</div>')
     elif boss_unlocked:
-        tiles_html += f"""
-        <div class="tile boss unlocked">
-            <div class="icon">{boss['icon']}</div>
-            <div class="name">{boss['name']}</div>
-        </div>"""
+        tiles_html += _map_tile_html(boss["icon"], boss["name"], "boss unlocked")
     else:
-        tiles_html += """
-        <div class="tile boss locked">
-            <div class="icon">🔒</div>
-            <div class="name">???</div>
-        </div>"""
+        tiles_html += _map_tile_html("🔒", "???", "boss locked")
 
-    map_html = f"""
-    <html><head><style>
-        body {{ margin:0; padding:0; background: transparent; font-family: 'Hiragino Kaku Gothic ProN','Hiragino Sans',Meiryo,sans-serif; }}
-        .grid {{ display:flex; flex-wrap:wrap; gap:14px; padding:10px; }}
-        .tile {{ width:120px; height:120px; border-radius:14px; display:flex; flex-direction:column; align-items:center; justify-content:center;
-                 text-decoration:none; color:#fff; text-align:center; position:relative; box-shadow: 0 4px 10px rgba(0,0,0,0.4); }}
-        .tile.unlocked {{ background: linear-gradient(145deg, #7a0d0d, #b21010); border: 2px solid #ff4b4b; }}
-        .tile.locked {{ background: #2b2b2b; border: 2px solid #555; color:#888; }}
-        .tile.boss {{ width:150px; height:150px; background: linear-gradient(145deg, #3a0303, #7a0d0d); border: 3px solid gold; }}
-        .tile.boss.defeated {{ background:#333; border-color:#888; }}
-        .icon {{ font-size:36px; }}
-        .name {{ font-size:13px; margin-top:6px; font-weight:bold; }}
-        .badge {{ font-size:10px; margin-top:4px; background:rgba(0,0,0,0.4); padding:2px 6px; border-radius:8px; }}
-    </style></head>
-    <body><div class="grid">{tiles_html}</div></body></html>
-    """
+    map_html = f"<html><head>{_MAP_STYLE}</head><body><div class=\"grid\">{tiles_html}</div></body></html>"
     components.html(map_html, height=340, scrolling=True)
 
     st.markdown("---")
     st.caption("赤く輝くフィールドが挑戦できる場所です。下のメニューから選んで挑みましょう。")
-    unlocked_units = [u for u in rpg_data.UNITS if rpg_data.is_unit_unlocked(u, field_progress)]
+    unlocked_units = [u for u in cat["units"] if rpg_data.is_unit_unlocked(category_id, u, field_progress)]
     options = {f"{u['icon']} {u['name']}（{u['enemy_name']}）": u["id"] for u in unlocked_units}
     if boss_unlocked and not boss_defeated:
         options[f"{boss['icon']} {boss['name']}（ラスボス）"] = "boss"
@@ -124,13 +163,18 @@ def render_map(student_id, student_name):
             st.rerun()
 
 
-def render_battle(unit_id, student_id, student_name, api_key):
+def render_battle(unit_id, student_id, student_name, api_key, category_id):
+    cat = rpg_data.CATEGORY_MAP.get(category_id)
+    if not cat:
+        st.error("ダンジョンが見つかりません。")
+        return
+
     is_boss = (unit_id == "boss")
     if is_boss:
-        unit = rpg_data.FINAL_BOSS
+        unit = cat["final_boss"]
         enemy_max_hp = rpg_data.BOSS_ENEMY_MAX_HP
     else:
-        unit = rpg_data.get_unit(unit_id)
+        unit = rpg_data.get_unit(category_id, unit_id)
         if not unit:
             st.error("フィールドが見つかりません。")
             return
@@ -144,19 +188,20 @@ def render_battle(unit_id, student_id, student_name, api_key):
             del st.query_params["field"]
         st.rerun()
 
-    st.title(f"⚔️ {enemy_label} とのバトル")
+    st.title(f"{cat['icon']} {cat['name']} － ⚔️ {enemy_label} とのバトル")
 
     if st.session_state.get("_pending_storage_error"):
         st.error(st.session_state.pop("_pending_storage_error"))
 
-    hp_key = f"battle_enemy_hp_{unit_id}"
-    player_hp_key = f"battle_player_hp_{unit_id}"
-    problems_key = f"battle_problems_{unit_id}"
-    results_key = f"battle_results_{unit_id}"
-    reviews_prefix = f"battle_review_{unit_id}_"
+    battle_key = f"{category_id}_{unit_id}"
+    hp_key = f"battle_enemy_hp_{battle_key}"
+    player_hp_key = f"battle_player_hp_{battle_key}"
+    problems_key = f"battle_problems_{battle_key}"
+    results_key = f"battle_results_{battle_key}"
+    reviews_prefix = f"battle_review_{battle_key}_"
 
     if problems_key not in st.session_state:
-        persisted = rpg_data.load_battle_state(student_id, unit_id)
+        persisted = rpg_data.load_battle_state(student_id, battle_key)
         if persisted:
             st.session_state[hp_key] = persisted.get("enemy_hp", enemy_max_hp)
             st.session_state[player_hp_key] = persisted.get("player_hp", rpg_data.PLAYER_MAX_HP)
@@ -173,7 +218,7 @@ def render_battle(unit_id, student_id, student_name, api_key):
     player_hp = st.session_state[player_hp_key]
 
     def _persist_battle_state():
-        rpg_data.save_battle_state(student_id, unit_id, {
+        rpg_data.save_battle_state(student_id, battle_key, {
             "problems": st.session_state.get(problems_key, []),
             "enemy_hp": st.session_state.get(hp_key),
             "player_hp": st.session_state.get(player_hp_key),
@@ -195,21 +240,21 @@ def render_battle(unit_id, student_id, student_name, api_key):
         ]
         for k in keys_to_remove:
             del st.session_state[k]
-        rpg_data.clear_battle_state(student_id, unit_id)
+        rpg_data.clear_battle_state(student_id, battle_key)
 
     if enemy_hp <= 0:
         st.success(f"🎉 {enemy_label} を倒しました！")
         if is_boss:
-            reward_flag = f"boss_reward_given_{student_id}"
+            reward_flag = f"boss_reward_given_{student_id}_{battle_key}"
             if not st.session_state.get(reward_flag, False):
-                rpg_data.record_boss_win(student_id)
+                rpg_data.record_boss_win(student_id, category_id)
                 st.session_state[reward_flag] = True
                 st.balloons()
-            st.success(f"🏆 称号「{rpg_data.FINAL_BOSS['title_reward']}」を獲得しました！")
+            st.success(f"🏆 称号「{cat['final_boss']['title_reward']}」を獲得しました！")
         else:
-            win_flag = f"win_recorded_{unit_id}"
+            win_flag = f"win_recorded_{battle_key}"
             if not st.session_state.get(win_flag, False):
-                rpg_data.record_unit_win(student_id, unit_id)
+                rpg_data.record_unit_win(student_id, category_id, unit_id)
                 st.session_state[win_flag] = True
         if st.button("🗺️ マップに戻ってさらに冒険する", type="primary"):
             _reset_battle_session()
@@ -230,17 +275,17 @@ def render_battle(unit_id, student_id, student_name, api_key):
     st.markdown("---")
 
     if problems_key not in st.session_state:
-        available = rpg_data.count_available_battle_problems(unit_topic_name)
+        available = rpg_data.count_available_battle_problems(category_id, unit_topic_name)
         if available == 0:
             st.warning("この分野にはまだバトル用に準備された問題がありません。先生に「🏷️ 問題のタグ付け作業」ページで、バトル用データ（難易度・正解）を生成してもらってください。")
             return
 
         st.write(f"この分野で挑戦できる問題は最大 **{available}問** あります。まとめて何問挑戦するか選んで、問題を呼び出そう。")
         max_count = min(10, available)
-        count = st.number_input("挑戦する問題数", min_value=1, max_value=max_count, value=min(3, max_count), step=1, key=f"battle_count_{unit_id}")
+        count = st.number_input("挑戦する問題数", min_value=1, max_value=max_count, value=min(3, max_count), step=1, key=f"battle_count_{battle_key}")
 
         if st.button("⚔️ 問題を呼び出す", type="primary"):
-            st.session_state[problems_key] = rpg_data.pick_battle_problems(unit_topic_name, int(count))
+            st.session_state[problems_key] = rpg_data.pick_battle_problems(category_id, unit_topic_name, int(count))
             st.session_state.pop(results_key, None)
             _persist_battle_state()
             st.rerun()
@@ -269,7 +314,7 @@ def render_battle(unit_id, student_id, student_name, api_key):
             data=image_files_to_pdf_bytes(existing_paths),
             file_name="battle_mondai.pdf",
             mime="application/pdf",
-            key=f"dl_batch_pdf_{unit_id}",
+            key=f"dl_batch_pdf_{battle_key}",
         )
     st.caption("💡 印刷不要！ダウンロード後、共有メニューから「GoodNotesにコピー」を選べば、そのままApple Pencilで全問書き込めます。書き終わったら、ページ順そのままでPDFまたは画像でエクスポートして、下のアップロード欄に送信してください。")
 
@@ -278,7 +323,7 @@ def render_battle(unit_id, student_id, student_name, api_key):
         "解答のPDF（複数ページ可）または画像を、問題の順番通りにアップロードしてください",
         type=["png", "jpg", "jpeg", "pdf"],
         accept_multiple_files=True,
-        key=f"battle_upload_{unit_id}",
+        key=f"battle_upload_{battle_key}",
     )
 
     if uploaded_files and results_key not in st.session_state:
@@ -341,7 +386,7 @@ def render_battle(unit_id, student_id, student_name, api_key):
                 st.warning(f"第{i+1}問: 😣 不正解 (読み取った解答: {result.get('extracted_answer') or '読み取れませんでした'})")
 
                 review_flag_key = f"{reviews_prefix}{i}"
-                if st.button(f"📖 第{i+1}問をくわしく添削してほしい", key=f"review_btn_{unit_id}_{i}"):
+                if st.button(f"📖 第{i+1}問をくわしく添削してほしい", key=f"review_btn_{battle_key}_{i}"):
                     st.session_state[review_flag_key] = gemini_service.generate_battle_review_prompt(
                         unit_topic_name, problem["correct_answer"], problem.get("answer_type", "value")
                     )
@@ -356,9 +401,9 @@ def render_battle(unit_id, student_id, student_name, api_key):
                                 data=f.read(),
                                 file_name=problem["image_file"],
                                 mime="image/png",
-                                key=f"dl_problem_{unit_id}_{i}",
+                                key=f"dl_problem_{battle_key}_{i}",
                             )
-                    render_copy_prompt_box(st.session_state[review_flag_key], key=f"review_{unit_id}_{i}")
+                    render_copy_prompt_box(st.session_state[review_flag_key], key=f"review_{battle_key}_{i}")
 
         st.markdown("---")
         st.subheader("🧠 NotebookLMで弱点を分析してもらおう")
@@ -375,12 +420,12 @@ def render_battle(unit_id, student_id, student_name, api_key):
                 data=build_labeled_pdf(karute_entries),
                 file_name="gakushu_karute.pdf",
                 mime="application/pdf",
-                key=f"dl_karute_{unit_id}",
+                key=f"dl_karute_{battle_key}",
             )
             st.info("①NotebookLM (notebooklm.google.com) を開く → ②「ソースを追加」でこのPDFをアップロード → ③下の質問をコピーして貼り付けて聞いてみよう")
             render_copy_prompt_box(
                 gemini_service.generate_notebooklm_analysis_prompt(unit_topic_name, correct_count, len(results)),
-                key=f"notebooklm_{unit_id}",
+                key=f"notebooklm_{battle_key}",
             )
 
         if st.button("⚔️ 次のバトルに挑む", type="primary"):
