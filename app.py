@@ -408,6 +408,8 @@ def main():
 
     if "ingest_preview_items" not in st.session_state:
         st.session_state["ingest_preview_items"] = None
+    if "ingest_detected_configs" not in st.session_state:
+        st.session_state["ingest_detected_configs"] = None
 
     student_id = st.session_state["student_id"]
     student_name = st.session_state["student_name"]
@@ -575,7 +577,7 @@ def main():
             # --- 💡【追加】模試PDFの自動取り込み・大問分割・タグ付け ---
             st.markdown("---")
             st.subheader("📥 模試PDFの自動取り込み・大問分割・タグ付け")
-            st.write("模試のPDFをアップロードすると、大問ごとに画像を切り出し、分野・単元・キーワードを自動判定してデータベースに登録します（既定ではAPIを使わない無料判定です）。")
+            st.write("模試のPDFをアップロードするだけで、大問ごとに画像を切り出し、分野・単元・キーワードを自動判定してデータベースに登録します（既定ではAPIを使わない無料判定です）。ページ範囲や大問見出しの文字を指定する必要はありません。")
 
             uploaded_pdf = st.file_uploader("模試PDFをアップロード", type=["pdf"], key="ingest_pdf_uploader")
 
@@ -587,34 +589,58 @@ def main():
                 )
                 university_name = st.text_input("大学名・模試名（例: 2025ベネッセ模試）", key="ingest_univ")
 
-                st.write("科目ごとの設定（ページ番号はPDF全体の通し番号、大問見出しの文字を指定してください）")
-                num_subjects = st.number_input("設定する科目数", min_value=1, max_value=5, value=1, key="ingest_num_subj")
-
-                subject_configs = []
-                for i in range(int(num_subjects)):
-                    with st.expander(f"科目 {i+1}", expanded=True):
-                        c1, c2, c3 = st.columns(3)
-                        with c1:
-                            sp = st.number_input("開始ページ", min_value=1, value=1, key=f"ingest_sp_{i}")
-                        with c2:
-                            ep = st.number_input("終了ページ", min_value=1, value=1, key=f"ingest_ep_{i}")
-                        with c3:
-                            letters = st.text_input("大問見出しの文字（例: X）", value="X", key=f"ingest_letters_{i}")
-                        subject_configs.append({
-                            "start_page": int(sp), "end_page": int(ep),
-                            "letters": set(letters), "label_prefix": f"{letters}_",
-                        })
+                tmp_pdf_path = os.path.join(BASE_DIR, f"_tmp_ingest_{uploaded_pdf.name}")
+                with open(tmp_pdf_path, "wb") as f:
+                    f.write(uploaded_pdf.getbuffer())
 
                 use_ai_fallback = st.checkbox(
                     "ルールベースで自信が持てない問題だけAIに判定させる（APIコストが発生します）",
                     value=False, key="ingest_use_ai"
                 )
 
-                if st.button("🔍 プレビュー生成（まだ保存しない）", key="ingest_preview_btn"):
-                    tmp_pdf_path = os.path.join(BASE_DIR, f"_tmp_ingest_{uploaded_pdf.name}")
-                    with open(tmp_pdf_path, "wb") as f:
-                        f.write(uploaded_pdf.getbuffer())
+                if st.button("🔍 大問を自動検出する", key="ingest_autodetect_btn", type="primary"):
+                    with st.spinner("PDF全体をスキャンして問題冊子を探しています（数百ページある場合は1分ほどかかります）..."):
+                        detected = pdf_ingestion.auto_detect_subject_configs(tmp_pdf_path)
+                    st.session_state["ingest_detected_configs"] = detected
+                    if not detected:
+                        st.warning(
+                            "大問の見出しを自動検出できませんでした。"
+                            "下の「手動で設定する」から開始/終了ページと見出し文字を直接指定してください。"
+                        )
+                    else:
+                        st.success(f"{len(detected)}件の問題冊子を検出しました。内容を確認してください。")
 
+                subject_configs = []
+
+                if st.session_state.get("ingest_detected_configs"):
+                    st.markdown("#### 検出結果の確認")
+                    st.caption("同じ問題が複数の版（問題冊子・解答一体版など）で重複して検出されることがあります。不要なものはチェックを外してください。")
+                    for i, cfg in enumerate(st.session_state["ingest_detected_configs"]):
+                        prefix = next(iter(cfg["letters"]))
+                        use_this = st.checkbox(
+                            f"見出し「{prefix}」: {cfg['start_page']}〜{cfg['end_page']}ページ",
+                            value=True, key=f"use_detected_{i}"
+                        )
+                        if use_this:
+                            subject_configs.append(cfg)
+
+                with st.expander("自動検出がうまくいかない場合: 手動で設定する"):
+                    num_subjects = st.number_input("設定する科目数", min_value=0, max_value=5, value=0, key="ingest_num_subj")
+                    for i in range(int(num_subjects)):
+                        with st.expander(f"科目 {i+1}", expanded=True):
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                sp = st.number_input("開始ページ", min_value=1, value=1, key=f"ingest_sp_{i}")
+                            with c2:
+                                ep = st.number_input("終了ページ", min_value=1, value=1, key=f"ingest_ep_{i}")
+                            with c3:
+                                letters = st.text_input("大問見出しの文字（例: X）", value="X", key=f"ingest_letters_{i}")
+                            subject_configs.append({
+                                "start_page": int(sp), "end_page": int(ep),
+                                "letters": set(letters), "label_prefix": f"{letters}_",
+                            })
+
+                if subject_configs and st.button("📸 プレビュー生成（まだ保存しない）", key="ingest_preview_btn"):
                     gemini_key = st.secrets.get("GEMINI_API_KEY", "") if use_ai_fallback else None
                     ingest_db = load_json(DB_PATH, [])
 
@@ -642,6 +668,7 @@ def main():
                     )
 
                 if st.session_state.get("ingest_preview_items"):
+                    st.markdown("#### 内容の確認")
                     for item in st.session_state["ingest_preview_items"]:
                         col1, col2 = st.columns([1, 2])
                         with col1:
@@ -653,7 +680,7 @@ def main():
                             st.write(f"**単元**: {', '.join(item['unit']) if item['unit'] else '(未判定)'}")
                             st.write(f"**キーワード**: {', '.join(item['keywords'])}")
                             st.caption(f"判定方法: {item['classify_method']}")
-                            if item["classify_method"] == "rule_low_confidence":
+                            if item["classify_method"] in ("rule_low_confidence",) or item["subject"] == "未分類":
                                 new_subject = st.selectbox(
                                     "分野を修正", pdf_ingestion.ALL_SUBJECTS,
                                     index=pdf_ingestion.ALL_SUBJECTS.index(item["subject"]) if item["subject"] in pdf_ingestion.ALL_SUBJECTS else 0,
@@ -667,6 +694,7 @@ def main():
                         ingest_db.extend(st.session_state["ingest_preview_items"])
                         save_json(DB_PATH, ingest_db)
                         st.session_state["ingest_preview_items"] = None
+                        st.session_state["ingest_detected_configs"] = None
                         st.success("データベースに保存しました！")
                         st.rerun()
 
