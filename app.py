@@ -431,9 +431,9 @@ def main():
         st.sidebar.progress(progress_val, text=f"次のレベルまで: {required_exp - current_tier_exp} EXP")
         st.sidebar.markdown(f"**🎟️ バトル挑戦チケット**: {tickets} 枚")
         st.sidebar.markdown(f"**🔥 連続学習**: {streak} 日目")
-        rpg_title = load_json(STUDENTS_DATA_PATH, {}).get(student_id, {}).get("title")
-        if rpg_title:
-            st.sidebar.markdown(f"**🏆 称号**: {rpg_title}")
+        earned_titles = rpg_data.get_earned_titles(rpg_data.load_student_with_rpg_fields(student_id))
+        if earned_titles:
+            st.sidebar.markdown(f"**🏆 称号**: {'、'.join(earned_titles)}")
         st.sidebar.markdown("---")
 
     # 権限に応じたメニューの切り替え
@@ -460,8 +460,9 @@ def main():
     student_history = history_db.get(student_id, [])
 
     rpg_field_from_url = st.query_params.get("field") if st.query_params.get("page") == "rpg_battle" else None
+    rpg_dungeon_from_url = st.query_params.get("dungeon")
 
-    if rpg_field_from_url:
+    if rpg_field_from_url and rpg_dungeon_from_url in rpg_data.CATEGORY_MAP:
         # マップ上のフィールドをクリックして遷移してきた場合は、サイドバーの選択に関わらずバトル画面を直接表示する
         try:
             rpg_api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
@@ -469,7 +470,7 @@ def main():
             rpg_api_key = os.environ.get("GEMINI_API_KEY")
         if not rpg_api_key or rpg_api_key == "ここにコピーしたAPIキーを貼り付けます":
             rpg_api_key = None
-        rpg_ui.render_battle(rpg_field_from_url, student_id, student_name, rpg_api_key)
+        rpg_ui.render_battle(rpg_field_from_url, student_id, student_name, rpg_api_key, rpg_dungeon_from_url)
     elif page == "⚙️ 先生専用管理ダッシュボード":
         st.title("⚙️ Kvillage先生専用 管理ダッシュボード")
         
@@ -579,6 +580,11 @@ def main():
             uploaded_pdf = st.file_uploader("模試PDFをアップロード", type=["pdf"], key="ingest_pdf_uploader")
 
             if uploaded_pdf:
+                ingest_category = st.selectbox(
+                    "出題範囲（どのダンジョン・分類の問題として登録するか）",
+                    ["模試", "教科書", "問題集", "入試"],
+                    index=0, key="ingest_category"
+                )
                 university_name = st.text_input("大学名・模試名（例: 2025ベネッセ模試）", key="ingest_univ")
 
                 st.write("科目ごとの設定（ページ番号はPDF全体の通し番号、大問見出しの文字を指定してください）")
@@ -620,6 +626,7 @@ def main():
                             subject_configs=subject_configs,
                             db=ingest_db,
                             img_dir=IMG_DIR,
+                            category=ingest_category,
                             api_key=gemini_key,
                             dry_run=True,
                         )
@@ -640,6 +647,7 @@ def main():
                         with col1:
                             st.image(os.path.join(IMG_DIR, item["image_file"]), use_container_width=True)
                         with col2:
+                            st.write(f"**出題範囲**: {item['category']}")
                             st.write(f"**大問**: {item['daimon_label']}")
                             st.write(f"**分野**: {item['subject']}")
                             st.write(f"**単元**: {', '.join(item['unit']) if item['unit'] else '(未判定)'}")
