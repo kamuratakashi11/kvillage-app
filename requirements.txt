@@ -1,6 +1,7 @@
 streamlit
 PyMuPDF
 pdfplumber
+pypdf
 google-generativeai
 Pillow
 reportlab
