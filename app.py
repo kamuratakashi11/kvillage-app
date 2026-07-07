@@ -17,6 +17,7 @@ from student_state import (
 import gemini_service
 import rpg_data
 import rpg_ui
+import pdf_ingestion
 
 # 共通設定 (Kvillage先生仕様)
 st.set_page_config(
@@ -404,7 +405,10 @@ def main():
     
     if not check_password_and_login():
         return
-        
+
+    if "ingest_preview_items" not in st.session_state:
+        st.session_state["ingest_preview_items"] = None
+
     student_id = st.session_state["student_id"]
     student_name = st.session_state["student_name"]
     is_guest = st.session_state.get("is_guest", False)
@@ -566,6 +570,97 @@ def main():
                         
                     st.success(f"「{name}」さんのアカウントとすべてのデータを完全に削除しました。")
                     st.rerun()
+
+            # --- 💡【追加】模試PDFの自動取り込み・大問分割・タグ付け ---
+            st.markdown("---")
+            st.subheader("📥 模試PDFの自動取り込み・大問分割・タグ付け")
+            st.write("模試のPDFをアップロードすると、大問ごとに画像を切り出し、分野・単元・キーワードを自動判定してデータベースに登録します（既定ではAPIを使わない無料判定です）。")
+
+            uploaded_pdf = st.file_uploader("模試PDFをアップロード", type=["pdf"], key="ingest_pdf_uploader")
+
+            if uploaded_pdf:
+                university_name = st.text_input("大学名・模試名（例: 2025ベネッセ模試）", key="ingest_univ")
+
+                st.write("科目ごとの設定（ページ番号はPDF全体の通し番号、大問見出しの文字を指定してください）")
+                num_subjects = st.number_input("設定する科目数", min_value=1, max_value=5, value=1, key="ingest_num_subj")
+
+                subject_configs = []
+                for i in range(int(num_subjects)):
+                    with st.expander(f"科目 {i+1}", expanded=True):
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            sp = st.number_input("開始ページ", min_value=1, value=1, key=f"ingest_sp_{i}")
+                        with c2:
+                            ep = st.number_input("終了ページ", min_value=1, value=1, key=f"ingest_ep_{i}")
+                        with c3:
+                            letters = st.text_input("大問見出しの文字（例: X）", value="X", key=f"ingest_letters_{i}")
+                        subject_configs.append({
+                            "start_page": int(sp), "end_page": int(ep),
+                            "letters": set(letters), "label_prefix": f"{letters}_",
+                        })
+
+                use_ai_fallback = st.checkbox(
+                    "ルールベースで自信が持てない問題だけAIに判定させる（APIコストが発生します）",
+                    value=False, key="ingest_use_ai"
+                )
+
+                if st.button("🔍 プレビュー生成（まだ保存しない）", key="ingest_preview_btn"):
+                    tmp_pdf_path = os.path.join(BASE_DIR, f"_tmp_ingest_{uploaded_pdf.name}")
+                    with open(tmp_pdf_path, "wb") as f:
+                        f.write(uploaded_pdf.getbuffer())
+
+                    gemini_key = st.secrets.get("GEMINI_API_KEY", "") if use_ai_fallback else None
+                    ingest_db = load_json(DB_PATH, [])
+
+                    with st.spinner("大問を検出して画像化・分野/単元判定中..."):
+                        preview_items = pdf_ingestion.ingest_pdf(
+                            pdf_path=tmp_pdf_path,
+                            university=university_name,
+                            source_pdf_name=uploaded_pdf.name,
+                            subject_configs=subject_configs,
+                            db=ingest_db,
+                            img_dir=IMG_DIR,
+                            api_key=gemini_key,
+                            dry_run=True,
+                        )
+
+                    st.session_state["ingest_preview_items"] = preview_items
+                    rule_count = sum(1 for it in preview_items if it["classify_method"] == "rule")
+                    low_count = sum(1 for it in preview_items if it["classify_method"] == "rule_low_confidence")
+                    ai_count = sum(1 for it in preview_items if it["classify_method"] == "ai")
+                    st.success(
+                        f"{len(preview_items)}問を検出しました"
+                        f"（高信頼のルール判定: {rule_count}問 / 自信度低いがルールのまま: {low_count}問 / AIに回した: {ai_count}問）。"
+                        f"内容を確認してください。"
+                    )
+
+                if st.session_state.get("ingest_preview_items"):
+                    for item in st.session_state["ingest_preview_items"]:
+                        col1, col2 = st.columns([1, 2])
+                        with col1:
+                            st.image(os.path.join(IMG_DIR, item["image_file"]), use_container_width=True)
+                        with col2:
+                            st.write(f"**大問**: {item['daimon_label']}")
+                            st.write(f"**分野**: {item['subject']}")
+                            st.write(f"**単元**: {', '.join(item['unit']) if item['unit'] else '(未判定)'}")
+                            st.write(f"**キーワード**: {', '.join(item['keywords'])}")
+                            st.caption(f"判定方法: {item['classify_method']}")
+                            if item["classify_method"] == "rule_low_confidence":
+                                new_subject = st.selectbox(
+                                    "分野を修正", pdf_ingestion.ALL_SUBJECTS,
+                                    index=pdf_ingestion.ALL_SUBJECTS.index(item["subject"]) if item["subject"] in pdf_ingestion.ALL_SUBJECTS else 0,
+                                    key=f"fix_subject_{item['image_file']}"
+                                )
+                                item["subject"] = new_subject
+                        st.markdown("---")
+
+                    if st.button("💾 この内容でデータベースに保存する", type="primary", key="ingest_commit_btn"):
+                        ingest_db = load_json(DB_PATH, [])
+                        ingest_db.extend(st.session_state["ingest_preview_items"])
+                        save_json(DB_PATH, ingest_db)
+                        st.session_state["ingest_preview_items"] = None
+                        st.success("データベースに保存しました！")
+                        st.rerun()
 
     elif page == "🏷️ 問題のタグ付け作業":
         st.title("🏷️ 問題のタグ付け（手動＆AI分類）作業")
