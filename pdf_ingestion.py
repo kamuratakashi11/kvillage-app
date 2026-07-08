@@ -536,17 +536,55 @@ def render_problem_images(pdf_path, markers, end_page, output_dir,
         out_path = os.path.join(output_dir, filename)
         canvas.save(out_path, "PNG")
 
+        first_page, first_top, first_bottom = slices[0]
         results.append({
             'label': m['label'],
             'image_path': out_path,
             'image_file': filename,
             'pages': used_pages,
             'text': problem_text,
+            # 計算用紙・解答用紙が後続ページに混入していた場合に、1ページ目だけを
+            # 採用した画像へ差し替えられるよう、1ページ目単体の切り出し範囲も保持しておく
+            'first_page': first_page,
+            'first_page_top': first_top,
+            'first_page_bottom': first_bottom,
         })
 
     plumber_pdf.close()
     doc.close()
     return results
+
+
+def crop_single_slice_image(pdf_path, page_num, top, bottom, output_dir,
+                             dpi=200, file_prefix="", label=""):
+    """
+    render_problem_images() が複数ページを1枚に結合した大問画像について、
+    計算用紙・解答用紙の混入が疑われる場合に「1ページ目（page_num/top/bottom）」
+    だけを切り出し直した新しい画像を生成する。
+
+    戻り値: (image_path, image_file)
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    import fitz  # 遅延import
+
+    doc = fitz.open(pdf_path)
+    zoom = dpi / 72.0
+    mat = fitz.Matrix(zoom, zoom)
+
+    page = doc[page_num - 1]
+    page_width = page.rect.width
+    clip = fitz.Rect(0, top, page_width, bottom)
+    pix = page.get_pixmap(matrix=mat, clip=clip)
+    if pix.n >= 4:
+        pix = fitz.Pixmap(fitz.csRGB, pix)
+    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    doc.close()
+
+    safe_label = re.sub(r'[^A-Za-z0-9_\-]', '_', label) if label else "trimmed"
+    filename = f"{file_prefix}{safe_label}_p1only_{uuid.uuid4().hex[:8]}.png"
+    out_path = os.path.join(output_dir, filename)
+    img.save(out_path, "PNG")
+    return out_path, filename
 
 
 # ---------------------------------------------------------------------------
@@ -661,7 +699,9 @@ def ingest_pdf(pdf_path, university, source_pdf_name, subject_configs,
              指定した場合のみ、ルールベースの自信度が低い問題だけAPIにフォールバックする。
     dry_run: True の場合、画像生成・判定のみ行い db には追記しない（プレビュー確認用）
 
-    戻り値: 新規追加された item(dict) のリスト
+    戻り値: 新規追加された item(dict) のリスト。各itemには、計算用紙・解答用紙の混入を
+            検知して1ページ目だけに切り詰め直すための一時情報（"_"で始まるキー）が
+            含まれる。db.jsonへの保存直前に strip_preview_fields() で取り除くこと。
     """
     new_items = []
 
@@ -707,6 +747,13 @@ def ingest_pdf(pdf_path, university, source_pdf_name, subject_configs,
                 "keywords": tags["keywords"],
                 "classify_method": tags["method"],
                 "topic": tags["unit"] if tags["unit"] else ["未分類"],
+                # プレビュー画面で「計算用紙・解答用紙の混入」を検知し、1ページ目だけを
+                # 採用し直せるようにするための一時情報（db.json保存前に取り除くこと）
+                "_pages": img_info["pages"],
+                "_first_page": img_info["first_page"],
+                "_first_page_top": img_info["first_page_top"],
+                "_first_page_bottom": img_info["first_page_bottom"],
+                "_label_prefix": cfg.get("label_prefix", ""),
             }
             new_items.append(item)
 
@@ -714,6 +761,11 @@ def ingest_pdf(pdf_path, university, source_pdf_name, subject_configs,
         db.extend(new_items)
 
     return new_items
+
+
+def strip_preview_fields(item):
+    """プレビュー専用の一時情報（"_"で始まるキー）を取り除いた、db.json保存用のdictを返す"""
+    return {k: v for k, v in item.items() if not k.startswith("_")}
 
 
 # ---------------------------------------------------------------------------
