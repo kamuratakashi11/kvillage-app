@@ -187,6 +187,33 @@ def is_boss_unlocked(category_id, field_progress):
     return all(field_progress.get(unit["id"], {}).get("defeated", 0) > 0 for unit in cat["units"])
 
 
+def compute_unit_states(category_id, field_progress):
+    """すごろく型マップ表示用に、各単元の状態（cleared/current/available/locked）を判定する。
+    クリア済み以外の単元のうち、order最小の2つ（現在挑戦中・次に挑戦できる）だけを開放し、
+    残りはロックする。"""
+    cat = CATEGORY_MAP[category_id]
+    units_by_order = sorted(cat["units"], key=lambda u: u["order"])
+
+    uncleared = [
+        u for u in units_by_order
+        if field_progress.get(u["id"], {}).get("defeated", 0) == 0
+    ]
+
+    states = {}
+    for u in units_by_order:
+        if field_progress.get(u["id"], {}).get("defeated", 0) > 0:
+            states[u["id"]] = "cleared"
+        else:
+            states[u["id"]] = "locked"
+
+    if len(uncleared) >= 1:
+        states[uncleared[0]["id"]] = "current"
+    if len(uncleared) >= 2:
+        states[uncleared[1]["id"]] = "available"
+
+    return states
+
+
 def record_unit_win(student_id, category_id, unit_id):
     data = load_json(STUDENTS_DATA_PATH, {})
     student = data.get(student_id, {})
