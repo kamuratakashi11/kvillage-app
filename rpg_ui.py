@@ -8,6 +8,7 @@ from PIL import Image
 
 import gemini_service
 import rpg_data
+import theme
 from image_utils import convert_pdf_to_image, image_files_to_pdf_bytes, build_labeled_pdf
 from storage import IMG_DIR
 from student_state import consume_tickets, update_student_exp
@@ -17,10 +18,11 @@ def render_copy_prompt_box(prompt_text, key):
     """コピー用プロンプトをテキストエリア＋ワンクリックコピーボタンで表示する"""
     st.text_area("コピー用プロンプト（下のボタンでもコピーできます）", prompt_text, height=260, key=f"prompt_area_{key}")
     b64 = base64.b64encode(prompt_text.encode("utf-8")).decode("ascii")
+    c = theme.COLORS
     components.html(f"""
     <div style="font-family: sans-serif;">
-      <button id="copy_btn_{key}" style="background:#b21010;color:#fff;border:none;border-radius:8px;padding:10px 18px;font-size:14px;cursor:pointer;">📋 プロンプトをコピーする</button>
-      <span id="copied_msg_{key}" style="margin-left:10px;color:#4caf50;"></span>
+      <button id="copy_btn_{key}" style="background:{c['accent']};color:#fff;border:none;border-radius:8px;padding:10px 18px;font-size:14px;cursor:pointer;">📋 プロンプトをコピーする</button>
+      <span id="copied_msg_{key}" style="margin-left:10px;color:{c['success']};"></span>
     </div>
     <script>
       function b64DecodeUnicode_{key}(str) {{
@@ -49,19 +51,20 @@ def _map_tile_html(icon, name, status_class, badge=""):
     </div>"""
 
 
-_MAP_STYLE = """
+_MAP_STYLE = f"""
 <style>
-    body { margin:0; padding:0; background: transparent; font-family: 'Hiragino Kaku Gothic ProN','Hiragino Sans',Meiryo,sans-serif; }
-    .grid { display:flex; flex-wrap:wrap; gap:14px; padding:10px; }
-    .tile { width:120px; height:120px; border-radius:14px; display:flex; flex-direction:column; align-items:center; justify-content:center;
-             text-decoration:none; color:#fff; text-align:center; position:relative; box-shadow: 0 4px 10px rgba(0,0,0,0.4); }
-    .tile.unlocked { background: linear-gradient(145deg, #7a0d0d, #b21010); border: 2px solid #ff4b4b; }
-    .tile.locked { background: #2b2b2b; border: 2px solid #555; color:#888; }
-    .tile.boss { width:150px; height:150px; background: linear-gradient(145deg, #3a0303, #7a0d0d); border: 3px solid gold; }
-    .tile.boss.defeated { background:#333; border-color:#888; }
-    .icon { font-size:36px; }
-    .name { font-size:13px; margin-top:6px; font-weight:bold; }
-    .badge { font-size:10px; margin-top:4px; background:rgba(0,0,0,0.4); padding:2px 6px; border-radius:8px; }
+    body {{ margin:0; padding:0; background: transparent; font-family: 'Hiragino Kaku Gothic ProN','Hiragino Sans',Meiryo,sans-serif; }}
+    .grid {{ display:flex; flex-wrap:wrap; gap:14px; padding:10px; }}
+    .tile {{ width:120px; height:120px; border-radius:14px; display:flex; flex-direction:column; align-items:center; justify-content:center;
+             text-decoration:none; color:{theme.COLORS['text_primary']}; text-align:center; position:relative;
+             box-shadow: 0 1px 3px rgba(0,0,0,0.06); }}
+    .tile.unlocked {{ background: {theme.COLORS['accent_bg']}; border: 2px solid {theme.COLORS['accent']}; }}
+    .tile.locked {{ background: {theme.COLORS['locked_bg']}; border: 2px dashed {theme.COLORS['locked']}; color:{theme.COLORS['text_muted']}; }}
+    .tile.boss {{ width:150px; height:150px; background: {theme.COLORS['amber_bg']}; border: 3px solid {theme.COLORS['amber']}; }}
+    .tile.boss.defeated {{ background: {theme.COLORS['success_bg']}; border-color: {theme.COLORS['success']}; }}
+    .icon {{ font-size:36px; }}
+    .name {{ font-size:13px; margin-top:6px; font-weight:bold; }}
+    .badge {{ font-size:10px; margin-top:4px; background:rgba(0,0,0,0.06); padding:2px 6px; border-radius:8px; }}
 </style>
 """
 
@@ -105,6 +108,127 @@ def _render_dungeon_selector(student_id):
         st.rerun()
 
 
+_SUGOROKU_COLUMNS = 4
+
+
+def _sugoroku_node_style(state, is_boss):
+    c = theme.COLORS
+    if state == "cleared":
+        return {"bg": c["success_bg"], "border": c["success"], "text": c["success_text"],
+                "label": "撃破済み" if is_boss else "クリア"}
+    if state == "current":
+        return {"bg": c["amber_bg"], "border": c["amber"], "text": c["amber_text"], "label": "挑戦中"}
+    return {"bg": c["accent_bg"], "border": c["accent"], "text": c["accent_text"], "label": "挑戦できます"}
+
+
+def _sugoroku_button_css(index, style, is_current):
+    """st.button直前に置いたマーカー要素との隣接関係を利用して、そのボタン1つだけを丸いマス目風に着色する"""
+    ring = f"box-shadow:0 0 0 4px {style['bg']}, inset 0 0 0 1px {style['border']} !important;" if is_current else ""
+    selector = (
+        f'div[data-testid="stElementContainer"]:has(div.sg-mk-{index}) '
+        f'+ div[data-testid="stElementContainer"] div[data-testid="stButton"] button'
+    )
+    return f"""
+    {selector} {{
+        border-radius: 50% !important;
+        width: 64px !important;
+        height: 64px !important;
+        padding: 0 !important;
+        background: {style['bg']} !important;
+        border: 2px solid {style['border']} !important;
+        color: {style['text']} !important;
+        font-weight: bold !important;
+        font-size: 20px !important;
+        {ring}
+    }}
+    """
+
+
+_SUGOROKU_LOCKED_CSS = f"""
+div[data-testid="stElementContainer"]:has(div.sg-mk-locked)
++ div[data-testid="stElementContainer"] div[data-testid="stButton"] button {{
+    border-radius: 50% !important;
+    width: 64px !important;
+    height: 64px !important;
+    padding: 0 !important;
+    background: {theme.COLORS['locked_bg']} !important;
+    border: 2px dashed {theme.COLORS['locked']} !important;
+    opacity: 0.75 !important;
+}}
+"""
+
+
+def _render_sugoroku_map(category_id, cat, field_progress, boss_unlocked, boss_defeated):
+    """すごろく状マップを、4列ボウストロフェドン（折り返し）でst.columns+st.buttonを使って描画する。
+    戻り値: クリックされたユニットid（'boss'含む）。何もクリックされなければNone。"""
+    c = theme.COLORS
+    units = sorted(cat["units"], key=lambda u: u["order"])
+    states = rpg_data.compute_unit_states(category_id, field_progress)
+
+    nodes = [
+        {"id": u["id"], "name": u["name"], "order": u["order"], "state": states[u["id"]], "is_boss": False}
+        for u in units
+    ]
+    boss = cat["final_boss"]
+    boss_state = "cleared" if boss_defeated else ("current" if boss_unlocked else "locked")
+    nodes.append({"id": "boss", "name": boss["name"], "order": len(units) + 1, "state": boss_state, "is_boss": True})
+
+    clicked_unit_id = None
+    marker_index = 0
+    button_css_rules = [_SUGOROKU_LOCKED_CSS]
+
+    for row_start in range(0, len(nodes), _SUGOROKU_COLUMNS):
+        row_nodes = nodes[row_start:row_start + _SUGOROKU_COLUMNS]
+        row_index = row_start // _SUGOROKU_COLUMNS
+        visual_row = row_nodes if row_index % 2 == 0 else list(reversed(row_nodes))
+
+        cols = st.columns(len(visual_row))
+        for col, node in zip(cols, visual_row):
+            with col:
+                st.markdown(f'<div class="sg-name">{node["name"]}</div>', unsafe_allow_html=True)
+                state = node["state"]
+                if state == "locked":
+                    st.markdown('<div class="sg-mk sg-mk-locked"></div>', unsafe_allow_html=True)
+                    st.button("🔒", key=f"sgbtn_{category_id}_{node['id']}", disabled=True)
+                    status_text, status_color = "ロック中", c["text_muted"]
+                else:
+                    style = _sugoroku_node_style(state, node["is_boss"])
+                    st.markdown(f'<div class="sg-mk sg-mk-{marker_index}"></div>', unsafe_allow_html=True)
+                    button_css_rules.append(_sugoroku_button_css(marker_index, style, state == "current"))
+                    label = "👑" if node["is_boss"] else str(node["order"])
+                    if st.button(label, key=f"sgbtn_{category_id}_{node['id']}"):
+                        clicked_unit_id = node["id"]
+                    status_text, status_color = style["label"], style["text"]
+                    marker_index += 1
+                st.markdown(
+                    f'<div class="sg-status" style="color:{status_color};">{status_text}</div>',
+                    unsafe_allow_html=True,
+                )
+
+        if row_start + _SUGOROKU_COLUMNS < len(nodes) and len(row_nodes) == _SUGOROKU_COLUMNS:
+            # 次の行の先頭ノードは、この行の折り返し位置（偶数行なら右端／奇数行なら左端）の真下に来る
+            connector_cols = st.columns(len(visual_row))
+            turn_index = len(visual_row) - 1 if row_index % 2 == 0 else 0
+            with connector_cols[turn_index]:
+                st.markdown('<div class="sg-arrow-down">↓</div>', unsafe_allow_html=True)
+
+    st.markdown(
+        f"""
+        <style>
+            {''.join(button_css_rules)}
+            .sg-name {{ text-align:center; font-size:13px; font-weight:bold; color:{c['text_primary']};
+                        margin-bottom:6px; }}
+            .sg-status {{ text-align:center; font-size:11px; margin-top:4px; }}
+            .sg-arrow-down {{ text-align:center; font-size:20px; color:{c['border_strong']}; margin:2px 0; }}
+            div[data-testid="stButton"] {{ display:flex; justify-content:center; }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    return clicked_unit_id
+
+
 def _render_dungeon_map(student_id, student_name, category_id):
     cat = rpg_data.CATEGORY_MAP[category_id]
 
@@ -113,7 +237,7 @@ def _render_dungeon_map(student_id, student_name, category_id):
         st.rerun()
 
     st.subheader(f"{cat['icon']} {cat['name']}")
-    st.write("フィールドを選んで敵と戦い、経験値を稼ごう！撃破すると隣のフィールドが解放されます。")
+    st.write("マスを選んで敵と戦い、経験値を稼ごう！クリアすると次のマスが解放されます。")
 
     student = rpg_data.load_student_with_rpg_fields(student_id)
     dp = student["dungeon_progress"][category_id]
@@ -125,50 +249,21 @@ def _render_dungeon_map(student_id, student_name, category_id):
     if title:
         st.success(f"🏆 称号「{title}」を獲得しています！")
 
-    tiles_html = "".join(
-        _map_tile_html(
-            unit["icon"] if rpg_data.is_unit_unlocked(category_id, unit, field_progress) else "🔒",
-            unit["name"],
-            "unlocked" if rpg_data.is_unit_unlocked(category_id, unit, field_progress) else "locked",
-            f'<div class="badge">撃破 {field_progress.get(unit["id"], {}).get("defeated", 0)}回</div>'
-            if rpg_data.is_unit_unlocked(category_id, unit, field_progress) and field_progress.get(unit["id"], {}).get("defeated", 0) > 0
-            else "",
-        )
-        for unit in cat["units"]
-    )
+    st.caption("色のついたマスをクリックすると挑戦できます。ロック中のマスは、手前のマスをクリアすると解放されます。")
+    clicked_unit_id = _render_sugoroku_map(category_id, cat, field_progress, boss_unlocked, boss_defeated)
 
-    boss = cat["final_boss"]
-    if boss_defeated:
-        tiles_html += _map_tile_html(boss["icon"], boss["name"], "boss defeated", '<div class="badge">撃破済み</div>')
-    elif boss_unlocked:
-        tiles_html += _map_tile_html(boss["icon"], boss["name"], "boss unlocked")
-    else:
-        tiles_html += _map_tile_html("🔒", "???", "boss locked")
-
-    map_html = f"<html><head>{_MAP_STYLE}</head><body><div class=\"grid\">{tiles_html}</div></body></html>"
-    components.html(map_html, height=340, scrolling=True)
-
-    st.markdown("---")
-    st.caption("赤く輝くフィールドが挑戦できる場所です。下のメニューから選んで挑みましょう。")
-    unlocked_units = [u for u in cat["units"] if rpg_data.is_unit_unlocked(category_id, u, field_progress)]
-    options = {f"{u['icon']} {u['name']}（{u['enemy_name']}）": u["id"] for u in unlocked_units}
-    if boss_unlocked and not boss_defeated:
-        options[f"{boss['icon']} {boss['name']}（ラスボス）"] = "boss"
-
-    if options:
-        choice = st.selectbox("挑戦するフィールドを選ぶ", list(options.keys()))
-        if st.button("このフィールドに挑む", type="primary"):
-            st.query_params["page"] = "rpg_battle"
-            st.query_params["field"] = options[choice]
-            st.rerun()
+    if clicked_unit_id:
+        st.query_params["page"] = "rpg_battle"
+        st.query_params["dungeon"] = category_id
+        st.query_params["field"] = clicked_unit_id
+        st.rerun()
 
 
-def render_battle(unit_id, student_id, student_name, api_key, category_id):
+def _battle_unit_info(category_id, unit_id):
+    """戦闘対象（通常フィールド or ボス）の情報を返す。存在しなければNoneを返す。"""
     cat = rpg_data.CATEGORY_MAP.get(category_id)
     if not cat:
-        st.error("ダンジョンが見つかりません。")
-        return
-
+        return None, None, None
     is_boss = (unit_id == "boss")
     if is_boss:
         unit = cat["final_boss"]
@@ -176,14 +271,83 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id):
     else:
         unit = rpg_data.get_unit(category_id, unit_id)
         if not unit:
-            st.error("フィールドが見つかりません。")
-            return
+            return cat, None, None
         enemy_max_hp = rpg_data.ENEMY_MAX_HP
+    return cat, unit, enemy_max_hp
 
+
+def _pop_battle_setup_keys(battle_key):
+    st.session_state.pop(f"battle_num_questions_{battle_key}", None)
+
+
+def _render_battle_setup(category_id, unit_id, student_id):
+    cat, unit, _ = _battle_unit_info(category_id, unit_id)
+    if not cat:
+        st.error("ダンジョンが見つかりません。")
+        return
+    if not unit:
+        st.error("フィールドが見つかりません。")
+        return
+
+    battle_key = f"{category_id}_{unit_id}"
     unit_topic_name = unit["name"]
     enemy_label = unit.get("enemy_name", unit["name"])
 
+    if st.button("🗺️ マップに戻る", key=f"setup_back_{battle_key}"):
+        _pop_battle_setup_keys(battle_key)
+        if "field" in st.query_params:
+            del st.query_params["field"]
+        st.rerun()
+
+    st.title(f"{cat['icon']} {cat['name']} － ⚔️ {enemy_label} に挑む")
+
+    available = rpg_data.count_available_battle_problems(category_id, unit_topic_name)
+    if available == 0:
+        st.warning("この分野にはまだバトル用に準備された問題がありません。先生に「🏷️ 問題のタグ付け作業」ページで、バトル用データ（難易度・正解）を生成してもらってください。")
+        return
+
+    st.write(f"この分野で挑戦できる問題は最大 **{available}問** あります。何問挑戦するか選ぼう。")
+    max_count = min(10, available)
+    default_count = min(5, max_count)
+    count = st.slider("出題数", min_value=1, max_value=max_count, value=default_count, key=f"battle_num_q_slider_{battle_key}")
+
+    if st.button("⚔️ 挑戦をはじめる", type="primary", key=f"start_battle_{battle_key}"):
+        st.session_state[f"battle_num_questions_{battle_key}"] = count
+        st.rerun()
+
+
+def render_battle_entry(unit_id, student_id, student_name, api_key, category_id):
+    """マップのフィールドリンク経由の入口。出題数が未選択なら選択画面を、選択済みならバトル画面を表示する。"""
+    battle_key = f"{category_id}_{unit_id}"
+    problems_key = f"battle_problems_{battle_key}"
+    num_q_key = f"battle_num_questions_{battle_key}"
+
+    already_started = problems_key in st.session_state or bool(rpg_data.load_battle_state(student_id, battle_key))
+
+    if num_q_key not in st.session_state and not already_started:
+        _render_battle_setup(category_id, unit_id, student_id)
+        return
+
+    render_battle(unit_id, student_id, student_name, api_key, category_id, st.session_state.get(num_q_key))
+
+
+def render_battle(unit_id, student_id, student_name, api_key, category_id, num_questions=None):
+    cat, unit, enemy_max_hp = _battle_unit_info(category_id, unit_id)
+    if not cat:
+        st.error("ダンジョンが見つかりません。")
+        return
+    if not unit:
+        st.error("フィールドが見つかりません。")
+        return
+
+    is_boss = (unit_id == "boss")
+    unit_topic_name = unit["name"]
+    enemy_label = unit.get("enemy_name", unit["name"])
+
+    battle_key = f"{category_id}_{unit_id}"
+
     if st.button("🗺️ マップに戻る"):
+        _pop_battle_setup_keys(battle_key)
         if "field" in st.query_params:
             del st.query_params["field"]
         st.rerun()
@@ -193,7 +357,6 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id):
     if st.session_state.get("_pending_storage_error"):
         st.error(st.session_state.pop("_pending_storage_error"))
 
-    battle_key = f"{category_id}_{unit_id}"
     hp_key = f"battle_enemy_hp_{battle_key}"
     player_hp_key = f"battle_player_hp_{battle_key}"
     problems_key = f"battle_problems_{battle_key}"
@@ -240,6 +403,7 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id):
         ]
         for k in keys_to_remove:
             del st.session_state[k]
+        _pop_battle_setup_keys(battle_key)
         rpg_data.clear_battle_state(student_id, battle_key)
 
     if enemy_hp <= 0:
@@ -280,16 +444,10 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id):
             st.warning("この分野にはまだバトル用に準備された問題がありません。先生に「🏷️ 問題のタグ付け作業」ページで、バトル用データ（難易度・正解）を生成してもらってください。")
             return
 
-        st.write(f"この分野で挑戦できる問題は最大 **{available}問** あります。まとめて何問挑戦するか選んで、問題を呼び出そう。")
-        max_count = min(10, available)
-        count = st.number_input("挑戦する問題数", min_value=1, max_value=max_count, value=min(3, max_count), step=1, key=f"battle_count_{battle_key}")
-
-        if st.button("⚔️ 問題を呼び出す", type="primary"):
-            st.session_state[problems_key] = rpg_data.pick_battle_problems(category_id, unit_topic_name, int(count))
-            st.session_state.pop(results_key, None)
-            _persist_battle_state()
-            st.rerun()
-        return
+        count = min(num_questions or 5, available)
+        st.session_state[problems_key] = rpg_data.pick_battle_problems(category_id, unit_topic_name, count)
+        st.session_state.pop(results_key, None)
+        _persist_battle_state()
 
     problems = st.session_state[problems_key]
     n = len(problems)
