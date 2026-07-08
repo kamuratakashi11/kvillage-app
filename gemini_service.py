@@ -157,19 +157,17 @@ KVILLAGE_SYSTEM_PROMPT = r"""# 役割（Role）
 
 週末はNotebookLMで復習テストを作ってみてね。
 👉 [🧠 NotebookLMを開く](https://notebooklm.google.com/)
----
-"""
+---"""
 
 def generate_copy_prompt(mode="correction", student_name="", level="", streak=""):
     """
     生徒がGeminiに直接貼り付けて使うプロンプト文字列を組み立てる。
     ※レベル・日数の指定を廃止したため、引数はUIエラー回避用として残し、固定のプロンプトを返します。
     """
-    # 以前は mode (hint/answer/correction) で分岐していましたが、
-    # 今回のプロンプトは「白紙ならヒント」という指示が含まれており万能なため、
-    # どのモードで呼ばれてもこのプロンプトをそのまま返します。
     return KVILLAGE_SYSTEM_PROMPT.strip()
 
+# --- RPGバトル用データの生成: 既存問題（画像）をAIに解かせて難易度・正解を登録する ---
+# （ここから下は元のコードが続くようにしてください）
 # --- 以降のコード（RPGバトル用データの生成など）はそのまま残してください ---
 """
 
