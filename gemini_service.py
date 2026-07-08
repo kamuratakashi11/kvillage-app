@@ -5,18 +5,52 @@ import streamlit as st
 import google.generativeai as genai
 from PIL import Image
 
+_VALID_JSON_ESCAPE_CHARS = set('"\\/bfnrtu')
+
+
+def _escape_stray_backslashes(text):
+    """数式（\\le, \\sqrt など）の中の生のバックスラッシュは、JSONの妥当なエスケープ
+    （\\", \\\\, \\/, \\b, \\f, \\n, \\r, \\t, \\uXXXX）ではないため、そのままだと
+    "Invalid \\escape" でJSON解析が失敗する。妥当なエスケープ以外のバックスラッシュを
+    二重にして、文字列中のLaTeX記法をエスケープなしで出力してしまうモデルの応答を救済する。"""
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '\\' and i + 1 < n:
+            nxt = text[i + 1]
+            if nxt in _VALID_JSON_ESCAPE_CHARS:
+                out.append(ch)
+                out.append(nxt)
+                i += 2
+                continue
+            out.append('\\\\')
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def parse_json_lenient(text):
     """Geminiの応答をJSONとして解釈する。response_mime_type=application/jsonを指定していても、
-    モデルが末尾に余分な閉じかっこ等を付け足すことが稀にあるため、先頭から読み取れる
-    最初のJSON値だけを取り出して許容する。"""
+    モデルが末尾に余分な閉じかっこを付け足したり、数式中のバックスラッシュ（\\leや\\sqrtなど）を
+    エスケープせずに出力したりすることが稀にあるため、これらを許容してから解釈する。"""
     text = (text or "").strip()
     if not text:
         raise json.JSONDecodeError("空の応答です", text, 0)
     try:
         return json.loads(text)
     except json.JSONDecodeError:
+        pass
+    try:
         obj, _ = json.JSONDecoder().raw_decode(text)
         return obj
+    except json.JSONDecodeError:
+        pass
+    sanitized = _escape_stray_backslashes(text)
+    obj, _ = json.JSONDecoder().raw_decode(sanitized)
+    return obj
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_flash_model_name(api_key, exclude=()):
