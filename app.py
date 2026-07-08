@@ -187,6 +187,18 @@ def set_custom_design():
         background-color: rgba(15, 15, 15, 0.95);
         border-right: 1px solid rgba(178, 16, 16, 0.2);
     }}
+
+    /* 左側メニュー（サイドバー）を折りたたみ（アコーディオン）不可にし、常に表示させる */
+    [data-testid="stSidebarCollapseButton"] {{display: none !important;}}
+    [data-testid="stExpandSidebarButton"] {{display: none !important;}}
+    section[data-testid="stSidebar"][aria-expanded="false"] {{
+        transform: none !important;
+        min-width: 300px !important;
+        max-width: none !important;
+        width: 300px !important;
+        visibility: visible !important;
+        overflow: visible !important;
+    }}
     </style>
     """
     st.markdown(custom_css, unsafe_allow_html=True)
