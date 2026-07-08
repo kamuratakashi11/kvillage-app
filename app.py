@@ -9,7 +9,7 @@ import re
 
 from storage import (
     BASE_DIR, DB_PATH, IMG_DIR, USERS_PATH, HISTORY_PATH,
-    STUDENTS_DATA_PATH, BG_IMG_PATH, db_error, load_json, save_json,
+    STUDENTS_DATA_PATH, db_error, load_json, save_json,
 )
 from student_state import (
     init_student_data, process_daily_login, get_level_info,
@@ -18,6 +18,7 @@ import gemini_service
 import rpg_data
 import rpg_ui
 import pdf_ingestion
+import theme
 
 # 共通設定 (Kvillage先生仕様)
 st.set_page_config(
@@ -42,101 +43,49 @@ if not os.path.exists(IMG_DIR):
 MASTER_PASSWORD = "kvillage_master"
 SECRET_WORD = "kvillage2026" # 教室の合言葉
 
-from PIL import Image, ImageOps, ImageEnhance
 import io
 import base64
 
 def set_custom_design():
-    if not os.path.exists(BG_IMG_PATH):
-        return
-        
-    # タブレットでも爆速で表示させるため、メモリ上で画像を軽量JPEGに圧縮してBase64化
-    try:
-        img = Image.open(BG_IMG_PATH)
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-            
-        # ナインボールカラーの画像を強調（全体は落ち着いた状態をキープ）
-        enhancer_contrast = ImageEnhance.Contrast(img)
-        img = enhancer_contrast.enhance(2.0)  
-        
-        enhancer_brightness = ImageEnhance.Brightness(img)
-        img = enhancer_brightness.enhance(1.2)  
-        
-        # 【追加】文字や線（ある程度明るいピクセル）だけをさらに白く発光させるトーンカーブ補正
-        # ピクセルの明るさが100以上の部分だけを1.8倍明るくし、暗い図形部分はそのままにする
-        img = img.point(lambda x: min(255, int(x * 1.8)) if x > 100 else x)
-        
-        buffer = io.BytesIO()
-        # 画質を少し落としてファイルサイズを極限まで小さくする
-        img.save(buffer, format="JPEG", quality=50, optimize=True)
-        b64_str = base64.b64encode(buffer.getvalue()).decode()
-    except Exception as e:
-        return
-        
+    c = theme.COLORS
     custom_css = f"""
     <style>
-    /* 軽量化した数式背景画像 ＋ ダークオーバーレイ（薄めの黒い幕）で黒基調にする */
+    /* 白基調・清潔感重視のベース背景（グラデーション背景画像は廃止） */
     .stApp {{
-        background-color: #0a0a0a;
-        background-image: 
-            linear-gradient(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.4)),
-            url("data:image/jpeg;base64,{b64_str}");
-        background-size: cover;
-        background-position: center center;
-        background-attachment: fixed;
+        background-color: {c['bg_subtle']};
     }}
-    
-    /* ダークテーマ用のガラス調（グラスモーフィズム）パネル */
+
+    html, body, [class*="css"] {{
+        color: {c['text_primary']};
+    }}
+    p, h1, h2, h3, h4, h5, h6, span, div, label, li {{
+        color: {c['text_primary']};
+    }}
+    a {{
+        color: {c['accent']};
+    }}
+
+    /* カード風の白いパネル（薄い枠線・ごく軽い影） */
     .block-container {{
-        background: rgba(20, 20, 20, 0.85);
-        border-radius: 15px;
+        background: {c['bg_card']};
+        border-radius: 16px;
         padding: 2rem 3rem;
-        box-shadow: 0 8px 32px 0 rgba(178, 16, 16, 0.3);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        border: 1px solid rgba(178, 16, 16, 0.2);
+        border: 1px solid {c['border']};
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
         margin-top: 2rem;
         margin-bottom: 2rem;
     }}
-    
-    /* ----------------------------------------------------
-       ここから文字色を強制的に白（明るい色）にするCSS
-    ---------------------------------------------------- */
-    html, body, [class*="css"] {{
-        color: #ffffff !important;
-    }}
-    p, h1, h2, h3, h4, h5, h6, span, div, label, li {{
-        color: #f0f0f0 !important;
-    }}
-    a {{
-        color: #ff4b4b !important;
-    }}
-    .stButton > button {{
-        color: #ffffff !important;
-        background-color: #333333 !important;
-        border-color: #555555 !important;
-    }}
-    .stButton > button:hover {{
-        border-color: #ff4b4b !important;
-        color: #ff4b4b !important;
-    }}
-    .stTextInput > div > div > input {{
-        color: #ffffff !important;
-        background-color: rgba(0, 0, 0, 0.5) !important;
-    }}
 
-    
     div[data-testid="stDecoration"] {{display: none !important;}}
     div[class^="viewerBadge_"] {{display: none !important;}}
     div[class^="styles_viewerBadge"] {{display: none !important;}}
     #viewerBadge_link__1SllNM {{display: none !important;}}
     .viewerBadge_container__1JCIV {{display: none !important;}}
-    
+
     /* 画像のフルスクリーンボタンを隠す（あらゆる環境・言語に対応した最強のセレクタ） */
-    button[title="View fullscreen"], 
-    button[title="全画面表示"], 
-    [data-testid="StyledFullScreenButton"], 
+    button[title="View fullscreen"],
+    button[title="全画面表示"],
+    [data-testid="StyledFullScreenButton"],
     [data-testid="stImageFullScreenButton"],
     [data-testid="stImage"] button,
     .stImage button {{
@@ -145,47 +94,47 @@ def set_custom_design():
         opacity: 0 !important;
         pointer-events: none !important;
     }}
-    
-    /* 【最重要】入力フォーム（テキスト入力、セレクトボックス等）の視認性アップ */
+
+    /* 入力フォーム（テキスト入力、セレクトボックス等） */
     .stTextInput input, .stSelectbox > div > div {{
-        background-color: rgba(255, 255, 255, 0.05) !important;
-        border: 1px solid rgba(255, 255, 255, 0.2) !important;
+        background-color: {c['bg_card']} !important;
+        border: 1px solid {c['border_strong']} !important;
         border-radius: 8px !important;
-        color: white !important;
+        color: {c['text_primary']} !important;
     }}
-    /* 入力フォームにフォーカスした時（枠を深紅に光らせる） */
     .stTextInput input:focus, .stSelectbox > div > div:focus {{
-        border: 2px solid #b21010 !important;
-        box-shadow: 0 0 8px rgba(178, 16, 16, 0.6) !important;
-        background-color: rgba(255, 255, 255, 0.1) !important;
+        border: 2px solid {c['accent']} !important;
+        box-shadow: 0 0 0 3px {c['accent_bg']} !important;
     }}
-    
-    /* ボタンのモダン化（丸みとホバーアニメーション） */
+
+    /* ボタン（通常はアウトライン、primaryのみ塗りつぶし） */
     .stButton>button {{
-        border-radius: 30px;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.5);
+        border-radius: 12px;
+        transition: all 0.15s ease;
         font-weight: bold;
+        background-color: {c['bg_card']};
+        border: 1px solid {c['border_strong']};
+        color: {c['text_primary']};
+        box-shadow: none;
     }}
     .stButton>button:hover {{
-        transform: translateY(-3px);
-        box-shadow: 0 6px 15px rgba(178, 16, 16, 0.4);
+        border-color: {c['accent']};
+        color: {c['accent']};
     }}
-    
-    /* プライマリボタンの色調調整（ナインボール・クリムゾンレッド） */
-    .stButton>button[data-baseweb="button"]:not([disabled]) {{
-        background-color: #b21010;
-        color: white;
+    .stButton>button[data-baseweb="button"]:not([disabled])[kind="primary"] {{
+        background-color: {c['accent']};
+        color: #FFFFFF;
         border: none;
     }}
-    .stButton>button[data-baseweb="button"]:hover:not([disabled]) {{
-        background-color: #8b0000;
+    .stButton>button[data-baseweb="button"]:hover:not([disabled])[kind="primary"] {{
+        background-color: {c['accent_hover']};
+        color: #FFFFFF;
     }}
-    
-    /* サイドバーの背景もダークトーンに調整 */
+
+    /* サイドバーは白背景に薄い境界線 */
     [data-testid="stSidebar"] {{
-        background-color: rgba(15, 15, 15, 0.95);
-        border-right: 1px solid rgba(178, 16, 16, 0.2);
+        background-color: {c['bg_card']};
+        border-right: 1px solid {c['border']};
     }}
     </style>
     """
@@ -407,7 +356,7 @@ def main():
         streak = student_data.get("login_streak", 1)
         
         st.sidebar.markdown("---")
-        st.sidebar.markdown(f"<h2 style='text-align: center; color: #ffcccc; margin-bottom: 0;'>👑 レベル: {level}</h2>", unsafe_allow_html=True)
+        st.sidebar.markdown(f"<h2 style='text-align: center; color: {theme.COLORS['amber_text']}; margin-bottom: 0;'>👑 レベル: {level}</h2>", unsafe_allow_html=True)
         
         _, current_tier_exp, required_exp = get_level_info(exp)
         progress_val = min(1.0, max(0.0, current_tier_exp / required_exp))
@@ -453,7 +402,7 @@ def main():
             rpg_api_key = os.environ.get("GEMINI_API_KEY")
         if not rpg_api_key or rpg_api_key == "ここにコピーしたAPIキーを貼り付けます":
             rpg_api_key = None
-        rpg_ui.render_battle(rpg_field_from_url, student_id, student_name, rpg_api_key, rpg_dungeon_from_url)
+        rpg_ui.render_battle_entry(rpg_field_from_url, student_id, student_name, rpg_api_key, rpg_dungeon_from_url)
     elif page == "⚙️ 先生専用管理ダッシュボード":
         st.title("⚙️ Kvillage先生専用 管理ダッシュボード")
         
@@ -941,7 +890,7 @@ def main():
                     buffered = io.BytesIO()
                     img.save(buffered, format="PNG")
                     img_str = base64.b64encode(buffered.getvalue()).decode()
-                    st.markdown(f'<img src="data:image/png;base64,{img_str}" style="width:100%; max-width:800px; border-radius:8px; border:1px solid rgba(255,255,255,0.2);">', unsafe_allow_html=True)
+                    st.markdown(f'<img src="data:image/png;base64,{img_str}" style="width:100%; max-width:800px; border-radius:8px; border:1px solid {theme.COLORS["border"]};">', unsafe_allow_html=True)
                 except Exception as e:
                     st.error(f"画像の表示に失敗しました: {e}")
             else:
