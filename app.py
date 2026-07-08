@@ -340,6 +340,8 @@ def main():
         st.session_state["ingest_preview_items"] = None
     if "ingest_detected_configs" not in st.session_state:
         st.session_state["ingest_detected_configs"] = None
+    if "ingest_p1_preview_items" not in st.session_state:
+        st.session_state["ingest_p1_preview_items"] = None
 
     student_id = st.session_state["student_id"]
     student_name = st.session_state["student_name"]
@@ -651,6 +653,100 @@ def main():
                     save_json(DB_PATH, ingest_db)
                     st.session_state["ingest_preview_items"] = None
                     st.session_state["ingest_detected_configs"] = None
+                    st.success("データベースに保存しました！")
+                    st.rerun()
+
+        # --- 💡【追加】「1ページ＝1問」形式（大問見出しが無いPDF）の取り込み ---
+        st.markdown("---")
+        st.subheader("📄 1ページ1問形式のPDF取り込み")
+        st.write(
+            "「X1」「X2」のような大問見出しが無く、1ページに1問ずつ独立して収録されている"
+            "PDF（過去問集など）を、大問分割をせずページ単位でそのまま取り込みます。"
+        )
+
+        uploaded_pdf_p1 = st.file_uploader("PDFをアップロード", type=["pdf"], key="ingest_p1_uploader")
+
+        if uploaded_pdf_p1:
+            ingest_p1_category = st.selectbox(
+                "出題範囲（どのダンジョン・分類の問題として登録するか）",
+                ["入試", "模試", "教科書", "問題集"],
+                index=0, key="ingest_p1_category"
+            )
+            university_name_p1 = st.text_input("大学名・模試名（例: 共立女子大）", key="ingest_p1_univ")
+
+            tmp_pdf_path_p1 = os.path.join(BASE_DIR, f"_tmp_ingest_p1_{uploaded_pdf_p1.name}")
+            with open(tmp_pdf_path_p1, "wb") as f:
+                f.write(uploaded_pdf_p1.getbuffer())
+
+            total_pages_p1 = pdf_ingestion.get_pdf_page_count(tmp_pdf_path_p1)
+            st.caption(f"このPDFは全{total_pages_p1}ページです。")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                start_page_p1 = st.number_input(
+                    "開始ページ", min_value=1, max_value=total_pages_p1, value=1, key="ingest_p1_start"
+                )
+            with col2:
+                end_page_p1 = st.number_input(
+                    "終了ページ", min_value=1, max_value=total_pages_p1, value=total_pages_p1, key="ingest_p1_end"
+                )
+
+            use_ai_fallback_p1 = st.checkbox(
+                "ルールベースで自信が持てない問題だけAIに判定させる（APIコストが発生します）",
+                value=False, key="ingest_p1_use_ai"
+            )
+            st.caption(
+                "💡 フォントの文字コードが特殊で文字が正しく抽出できないPDFでは、"
+                "キーワード照合による分野・単元判定が機能しないことがあります。"
+                "その場合は上のチェックを入れてAI判定を使うことをおすすめします。"
+            )
+
+            if st.button("📸 プレビュー生成（まだ保存しない）", key="ingest_p1_preview_btn"):
+                gemini_key_p1 = st.secrets.get("GEMINI_API_KEY", "") if use_ai_fallback_p1 else None
+                ingest_db_p1 = load_json(DB_PATH, [])
+                with st.spinner("ページを画像化・分野/単元判定中..."):
+                    preview_items_p1 = pdf_ingestion.ingest_pdf_one_problem_per_page(
+                        pdf_path=tmp_pdf_path_p1,
+                        university=university_name_p1,
+                        source_pdf_name=uploaded_pdf_p1.name,
+                        start_page=int(start_page_p1),
+                        end_page=int(end_page_p1),
+                        db=ingest_db_p1,
+                        img_dir=IMG_DIR,
+                        category=ingest_p1_category,
+                        api_key=gemini_key_p1,
+                        dry_run=True,
+                    )
+                st.session_state["ingest_p1_preview_items"] = preview_items_p1
+                st.success(f"{len(preview_items_p1)}問を検出しました。内容を確認してください。")
+
+            if st.session_state.get("ingest_p1_preview_items"):
+                st.markdown("#### 内容の確認")
+                for item in st.session_state["ingest_p1_preview_items"]:
+                    col1, col2 = st.columns([1, 2])
+                    with col1:
+                        st.image(os.path.join(IMG_DIR, item["image_file"]), use_container_width=True)
+                    with col2:
+                        st.write(f"**出題範囲**: {item['category']}")
+                        st.write(f"**ページ**: {item['page']}")
+                        st.write(f"**分野**: {item['subject']}")
+                        st.write(f"**単元**: {', '.join(item['unit']) if item['unit'] else '(未判定)'}")
+                        st.write(f"**キーワード**: {', '.join(item['keywords'])}")
+                        st.caption(f"判定方法: {item['classify_method']}")
+                        if item["classify_method"] in ("rule_low_confidence",) or item["subject"] == "未分類":
+                            new_subject_p1 = st.selectbox(
+                                "分野を修正", pdf_ingestion.ALL_SUBJECTS,
+                                index=pdf_ingestion.ALL_SUBJECTS.index(item["subject"]) if item["subject"] in pdf_ingestion.ALL_SUBJECTS else 0,
+                                key=f"fix_subject_p1_{item['image_file']}"
+                            )
+                            item["subject"] = new_subject_p1
+                    st.markdown("---")
+
+                if st.button("💾 この内容でデータベースに保存する", type="primary", key="ingest_p1_commit_btn"):
+                    ingest_db_p1 = load_json(DB_PATH, [])
+                    ingest_db_p1.extend(st.session_state["ingest_p1_preview_items"])
+                    save_json(DB_PATH, ingest_db_p1)
+                    st.session_state["ingest_p1_preview_items"] = None
                     st.success("データベースに保存しました！")
                     st.rerun()
 

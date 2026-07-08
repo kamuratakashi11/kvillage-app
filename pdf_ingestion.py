@@ -587,6 +587,111 @@ def crop_single_slice_image(pdf_path, page_num, top, bottom, output_dir,
     return out_path, filename
 
 
+def get_pdf_page_count(pdf_path):
+    """PDFの総ページ数を返す（UIでページ範囲の初期値を決める用）。"""
+    from pypdf import PdfReader
+    return len(PdfReader(pdf_path).pages)
+
+
+# ---------------------------------------------------------------------------
+# 2.5 「1ページ＝1問」形式のPDF（大問見出しが無い過去問集など）の取り込み
+# ---------------------------------------------------------------------------
+# detect_markers()は「X1」「X2」のような大問見出しの検出に依存しているため、
+# そもそも見出しが無い（1ページに1問ずつ独立して収録されている）PDFでは
+# 1件も検出できない。この場合は見出し検出を行わず、指定したページ範囲を
+# 単純にページ単位で1問ずつ切り出す。
+def render_pages_as_problems(pdf_path, start_page, end_page, output_dir,
+                              dpi=200, file_prefix=""):
+    """
+    大問見出しの検出を行わず、start_page〜end_pageの各ページをそのまま
+    1問1画像として切り出す。
+
+    戻り値: [{'label': str, 'image_path': str, 'image_file': str,
+              'pages': [int], 'text': str}, ...]
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    import fitz  # 遅延import
+    doc = fitz.open(pdf_path)
+    plumber_pdf = pdfplumber.open(pdf_path)
+
+    results = []
+    zoom = dpi / 72.0
+    mat = fitz.Matrix(zoom, zoom)
+
+    for pnum in range(start_page, end_page + 1):
+        plumber_page = plumber_pdf.pages[pnum - 1]
+        page_text = plumber_page.extract_text() or ""
+
+        page = doc[pnum - 1]
+        pix = page.get_pixmap(matrix=mat)
+        if pix.n >= 4:
+            pix = fitz.Pixmap(fitz.csRGB, pix)
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+        filename = f"{file_prefix}p{pnum}_{uuid.uuid4().hex[:8]}.png"
+        out_path = os.path.join(output_dir, filename)
+        img.save(out_path, "PNG")
+
+        results.append({
+            'label': f"p{pnum}",
+            'image_path': out_path,
+            'image_file': filename,
+            'pages': [pnum],
+            'text': page_text,
+        })
+
+    plumber_pdf.close()
+    doc.close()
+    return results
+
+
+def ingest_pdf_one_problem_per_page(pdf_path, university, source_pdf_name, start_page, end_page,
+                                     db, img_dir, category="入試", api_key=None,
+                                     confidence_threshold=0.5, dry_run=False):
+    """
+    大問見出しが無い「1ページ＝1問」形式のPDF向けの取り込みオーケストレーター。
+    detect_markers()を使わず、ページ単位でそのまま1問として登録する。
+
+    api_key: Gemini APIキー。フォントのエンコードが壊れているなどの理由で
+             ページからテキストが正しく抽出できないPDFでは、ルールベース判定
+             （キーワード照合）が機能しないため、画像を直接見て判定するAI
+             フォールバックの利用を推奨する。
+
+    戻り値: 新規追加されたitem(dict)のリスト
+    """
+    images = render_pages_as_problems(
+        pdf_path=pdf_path, start_page=start_page, end_page=end_page, output_dir=img_dir,
+    )
+
+    new_items = []
+    for img_info in images:
+        tags = classify_problem_hybrid(
+            image_path=img_info["image_path"],
+            text=img_info["text"],
+            api_key=api_key,
+            confidence_threshold=confidence_threshold,
+        )
+        item = {
+            "image_file": img_info["image_file"],
+            "category": category,
+            "university": university,
+            "source_pdf": source_pdf_name,
+            "page": img_info["pages"][0],
+            "daimon_label": img_info["label"],
+            "subject": tags["subject"],
+            "unit": tags["unit"],
+            "keywords": tags["keywords"],
+            "classify_method": tags["method"],
+            "topic": tags["unit"] if tags["unit"] else ["未分類"],
+        }
+        new_items.append(item)
+
+    if not dry_run:
+        db.extend(new_items)
+
+    return new_items
+
+
 # ---------------------------------------------------------------------------
 # 3. （任意）Gemini APIによる分類 ―― ルールベースで自信が無い場合のみ使う想定
 # ---------------------------------------------------------------------------
