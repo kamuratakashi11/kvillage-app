@@ -391,6 +391,8 @@ def main():
         st.session_state["ingest_preview_items"] = None
     if "ingest_detected_configs" not in st.session_state:
         st.session_state["ingest_detected_configs"] = None
+    if "cleanup_preview_results" not in st.session_state:
+        st.session_state["cleanup_preview_results"] = None
 
     student_id = st.session_state["student_id"]
     student_name = st.session_state["student_name"]
@@ -676,6 +678,118 @@ def main():
                         save_json(DB_PATH, ingest_db)
                         st.session_state["ingest_preview_items"] = None
                         st.session_state["ingest_detected_configs"] = None
+                        st.success("データベースに保存しました！")
+                        st.rerun()
+
+            # --- 💡【追加】1問1PDFファイルの整理・取り込み ---
+            st.markdown("---")
+            st.subheader("🧹 1問1PDFファイルの整理・取り込み")
+            st.write(
+                "「1つのPDF = 1問」のはずが、1ページ目の問題文に続けて解答用紙や答案が"
+                "混ざって入ってしまっているファイル群を整理して取り込みます。"
+                "ファイルごとに「1ページ目だけ残す」か「取り込まない」かを選べます。"
+            )
+
+            uploaded_pdfs = st.file_uploader(
+                "PDFファイルを選択（複数選択可）", type=["pdf"], accept_multiple_files=True,
+                key="cleanup_pdf_uploader"
+            )
+
+            if uploaded_pdfs:
+                cleanup_category = st.selectbox(
+                    "出題範囲（どのダンジョン・分類の問題として登録するか）",
+                    ["入試", "教科書", "問題集", "模試"],
+                    index=0, key="cleanup_category"
+                )
+                university_name_cleanup = st.text_input(
+                    "大学名・模試名（例: 過去問まとめ）", key="cleanup_univ"
+                )
+
+                st.markdown("#### ファイルごとの設定")
+                st.caption("ページ数が2以上のファイルは、解答用紙等が混ざっている可能性があるとして警告表示します。")
+
+                file_entries = []
+                tmp_dir = os.path.join(BASE_DIR, "_tmp_cleanup")
+                os.makedirs(tmp_dir, exist_ok=True)
+
+                for uf in uploaded_pdfs:
+                    tmp_path = os.path.join(tmp_dir, uf.name)
+                    with open(tmp_path, "wb") as f:
+                        f.write(uf.getbuffer())
+
+                    page_count = pdf_ingestion.get_pdf_page_count(tmp_path)
+
+                    cols = st.columns([3, 1, 2])
+                    with cols[0]:
+                        label = f"**{uf.name}**（{page_count}ページ）"
+                        if page_count > 1:
+                            label += " ⚠️ 解答用紙等が混ざっている可能性"
+                        st.markdown(label)
+                    with cols[1]:
+                        st.write("")
+                    with cols[2]:
+                        if page_count > 1:
+                            action = st.selectbox(
+                                "このファイルの扱い",
+                                options=["1ページ目だけ残す", "取り込まない", "そのまま1ページ目を使う"],
+                                key=f"cleanup_action_{uf.name}"
+                            )
+                            action_map = {
+                                "1ページ目だけ残す": "trim_to_page1",
+                                "取り込まない": "exclude",
+                                "そのまま1ページ目を使う": "keep",
+                            }
+                            action_value = action_map[action]
+                        else:
+                            st.write("（1ページのみ・そのまま使用）")
+                            action_value = "keep"
+
+                    file_entries.append({
+                        "path": tmp_path,
+                        "original_filename": uf.name,
+                        "action": action_value,
+                    })
+
+                use_ai_fallback_cleanup = st.checkbox(
+                    "ルールベースで自信が持てない問題だけAIに判定させる（APIコストが発生します）",
+                    value=False, key="cleanup_use_ai"
+                )
+
+                if st.button("📸 プレビュー生成（まだ保存しない）", key="cleanup_preview_btn", type="primary"):
+                    gemini_key = st.secrets.get("GEMINI_API_KEY", "") if use_ai_fallback_cleanup else None
+                    with st.spinner("画像化・分野/単元判定中..."):
+                        preview_results = pdf_ingestion.process_single_problem_pdfs(
+                            file_entries,
+                            university=university_name_cleanup,
+                            img_dir=IMG_DIR,
+                            category=cleanup_category,
+                            api_key=gemini_key,
+                            dry_run=True,
+                        )
+                    st.session_state["cleanup_preview_results"] = preview_results
+                    excluded_count = sum(1 for e in file_entries if e["action"] == "exclude")
+                    st.success(f"{len(preview_results)}件を取り込み対象として処理しました（{excluded_count}件は除外設定のためスキップ）。")
+
+                if st.session_state.get("cleanup_preview_results"):
+                    st.markdown("#### 内容の確認")
+                    for r in st.session_state["cleanup_preview_results"]:
+                        item = r["item"]
+                        col1, col2 = st.columns([1, 2])
+                        with col1:
+                            st.image(os.path.join(IMG_DIR, item["image_file"]), use_container_width=True)
+                        with col2:
+                            st.write(f"**出題範囲**: {item['category']}")
+                            st.write(f"**元ファイル**: {r['original_filename']}（{r['action']}）")
+                            st.write(f"**分野**: {item['subject']}")
+                            st.write(f"**単元**: {', '.join(item['unit']) if item['unit'] else '(未判定)'}")
+                            st.write(f"**キーワード**: {', '.join(item['keywords'])}")
+                        st.markdown("---")
+
+                    if st.button("💾 この内容でデータベースに保存する", type="primary", key="cleanup_commit_btn"):
+                        cleanup_db = load_json(DB_PATH, [])
+                        cleanup_db.extend([r["item"] for r in st.session_state["cleanup_preview_results"]])
+                        save_json(DB_PATH, cleanup_db)
+                        st.session_state["cleanup_preview_results"] = None
                         st.success("データベースに保存しました！")
                         st.rerun()
 

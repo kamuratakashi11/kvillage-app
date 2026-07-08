@@ -717,6 +717,145 @@ def ingest_pdf(pdf_path, university, source_pdf_name, subject_configs,
 
 
 # ---------------------------------------------------------------------------
+# 4.5 「1問1PDF」形式だが解答用紙・答案が混ざってしまっているファイルの整理
+# ---------------------------------------------------------------------------
+# 想定シーン: 模試まるごとのPDFとは別に、「1つのPDF = 1問」という形で集めた
+# 問題ファイル群があるが、その中に「1ページ目は問題文、2ページ目以降は
+# 解答用紙や生徒の答案」が混入してしまっているものがある。
+# 先生が対象ファイルを選び、「1ページ目だけ残す」か「DBに含めない」かを
+# 選択できるようにする。
+
+def get_pdf_page_count(pdf_path):
+    """PDFの総ページ数を返す（ファイル一覧に表示する用）。"""
+    from pypdf import PdfReader
+    return len(PdfReader(pdf_path).pages)
+
+
+def trim_pdf_to_first_page(pdf_path, output_path):
+    """
+    PDFの1ページ目だけを残した新しいPDFを output_path に保存する。
+    元のファイルは変更しない。
+    """
+    from pypdf import PdfReader, PdfWriter
+    reader = PdfReader(pdf_path)
+    writer = PdfWriter()
+    writer.add_page(reader.pages[0])
+    with open(output_path, "wb") as f:
+        writer.write(f)
+    return output_path
+
+
+def render_first_page_image(pdf_path, output_path, dpi=200):
+    """
+    PDFの1ページ目をそのままPNG画像として書き出す（fitz使用）。
+    「1つのPDF=1問」ファイルをそのままDB登録用画像に変換する際に使う。
+    """
+    import fitz  # 遅延import
+    doc = fitz.open(pdf_path)
+    zoom = dpi / 72.0
+    mat = fitz.Matrix(zoom, zoom)
+    page = doc[0]
+    pix = page.get_pixmap(matrix=mat)
+    if pix.n >= 4:
+        # アルファチャンネル付き（RGBA等）の場合、そのままRGBとして扱うとズレるためRGBに変換する
+        pix = fitz.Pixmap(fitz.csRGB, pix)
+    pix.save(output_path)
+    doc.close()
+    return output_path
+
+
+def process_single_problem_pdfs(file_entries, university, img_dir, category="入試",
+                                 api_key=None, confidence_threshold=0.5, dry_run=False):
+    """
+    「1つのPDF = 1問」形式のファイル群を処理し、db.jsonに追記できる
+    item(dict)のリストを作る。
+
+    file_entries: [
+        {
+            "path": "/path/to/uploaded.pdf",   # 一時保存されたPDFのパス
+            "original_filename": "problem_012.pdf",
+            "action": "keep" | "trim_to_page1" | "exclude",
+            # keep          : そのまま1ページ目を画像化して登録（複数ページPDFの場合、
+            #                  1ページ目のみを画像化する。2ページ目以降がある場合でも
+            #                  無視するだけで削除はしない）
+            # trim_to_page1 : 1ページ目だけを残した新しいPDFを作ってから登録
+            #                  （元ファイル自体を1ページに縮小したい場合）
+            # exclude       : このファイルはDBに一切登録しない
+        },
+        ...
+    ]
+    university: この一括登録全体に付与する大学名・模試名
+    img_dir: 画像の保存先ディレクトリ
+    category: この問題データの出題範囲区分（"教科書"/"問題集"/"模試"/"入試" のいずれか）
+    api_key: Noneならルールベースのみで判定（無料）。指定時のみ自信度が低い問題をAIにフォールバック。
+    dry_run: Trueなら画像生成・判定のみ行い、db.jsonへの追記はしない（プレビュー用）
+
+    戻り値: [{"item": dict, "original_filename": str, "action": str}, ...]
+             action="exclude" のファイルは結果に含まれない。
+    """
+    import pdfplumber as _pdfplumber
+    import tempfile
+
+    results = []
+
+    for entry in file_entries:
+        if entry["action"] == "exclude":
+            continue
+
+        src_path = entry["path"]
+        temp_trimmed_path = None
+
+        if entry["action"] == "trim_to_page1":
+            temp_trimmed_path = os.path.join(
+                tempfile.gettempdir(), f"_trimmed_{uuid.uuid4().hex[:8]}.pdf"
+            )
+            trim_pdf_to_first_page(src_path, temp_trimmed_path)
+            pdf_for_image = temp_trimmed_path
+        else:  # "keep"
+            pdf_for_image = src_path
+
+        try:
+            # 分野・単元判定用にページ1のテキストを抽出
+            with _pdfplumber.open(pdf_for_image) as pdf:
+                page1_text = pdf.pages[0].extract_text() or ""
+
+            filename = f"single_{uuid.uuid4().hex[:8]}.png"
+            out_path = os.path.join(img_dir, filename)
+            render_first_page_image(pdf_for_image, out_path)
+        finally:
+            if temp_trimmed_path and os.path.exists(temp_trimmed_path):
+                os.remove(temp_trimmed_path)
+
+        tags = classify_problem_hybrid(
+            image_path=out_path,
+            text=page1_text,
+            api_key=api_key,
+            confidence_threshold=confidence_threshold,
+        )
+
+        item = {
+            "image_file": filename,
+            "category": category,
+            "university": university,
+            "source_pdf": entry["original_filename"],
+            "page": 1,
+            "daimon_label": None,
+            "subject": tags["subject"],
+            "unit": tags["unit"],
+            "keywords": tags["keywords"],
+            "classify_method": tags["method"],
+            "topic": tags["unit"] if tags["unit"] else ["未分類"],
+        }
+        results.append({
+            "item": item,
+            "original_filename": entry["original_filename"],
+            "action": entry["action"],
+        })
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # 5. app.py「先生専用管理ダッシュボード」に追加するStreamlit UIの例
 # ---------------------------------------------------------------------------
 STREAMLIT_UI_SNIPPET = '''
@@ -842,6 +981,124 @@ if uploaded_pdf:
             save_json(DB_PATH, db)
             st.session_state["ingest_preview_items"] = None
             st.session_state["ingest_detected_configs"] = None
+            st.success("データベースに保存しました！")
+            st.rerun()
+'''
+
+
+# ---------------------------------------------------------------------------
+# 6. app.py に追加する、「1問1PDF」クリーンアップ用のStreamlit UI
+#    （解答用紙・答案が混ざってしまったPDF群を整理して取り込む）
+# ---------------------------------------------------------------------------
+SINGLE_PDF_CLEANUP_UI_SNIPPET = '''
+st.markdown("---")
+st.subheader("🧹 1問1PDFファイルの整理・取り込み")
+st.write(
+    "「1つのPDF = 1問」のはずが、1ページ目の問題文に続けて解答用紙や答案が"
+    "混ざって入ってしまっているファイル群を整理して取り込みます。"
+    "ファイルごとに「1ページ目だけ残す」か「取り込まない」かを選べます。"
+)
+
+uploaded_pdfs = st.file_uploader(
+    "PDFファイルを選択（複数選択可）", type=["pdf"], accept_multiple_files=True,
+    key="cleanup_pdf_uploader"
+)
+
+if uploaded_pdfs:
+    cleanup_category = st.selectbox(
+        "出題範囲（どのダンジョン・分類の問題として登録するか）",
+        ["入試", "教科書", "問題集", "模試"],
+        index=0, key="cleanup_category"
+    )
+    university_name_cleanup = st.text_input(
+        "大学名・模試名（例: 過去問まとめ）", key="cleanup_univ"
+    )
+
+    st.markdown("#### ファイルごとの設定")
+    st.caption("ページ数が2以上のファイルは、解答用紙等が混ざっている可能性があるとして警告表示します。")
+
+    file_entries = []
+    tmp_dir = os.path.join(BASE_DIR, "_tmp_cleanup")
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    for uf in uploaded_pdfs:
+        tmp_path = os.path.join(tmp_dir, uf.name)
+        with open(tmp_path, "wb") as f:
+            f.write(uf.getbuffer())
+
+        page_count = pdf_ingestion.get_pdf_page_count(tmp_path)
+
+        cols = st.columns([3, 1, 2])
+        with cols[0]:
+            label = f"**{uf.name}**（{page_count}ページ）"
+            if page_count > 1:
+                label += " ⚠️ 解答用紙等が混ざっている可能性"
+            st.markdown(label)
+        with cols[1]:
+            st.write("")
+        with cols[2]:
+            if page_count > 1:
+                action = st.selectbox(
+                    "このファイルの扱い",
+                    options=["1ページ目だけ残す", "取り込まない", "そのまま1ページ目を使う"],
+                    key=f"cleanup_action_{uf.name}"
+                )
+                action_map = {
+                    "1ページ目だけ残す": "trim_to_page1",
+                    "取り込まない": "exclude",
+                    "そのまま1ページ目を使う": "keep",
+                }
+                action_value = action_map[action]
+            else:
+                st.write("（1ページのみ・そのまま使用）")
+                action_value = "keep"
+
+        file_entries.append({
+            "path": tmp_path,
+            "original_filename": uf.name,
+            "action": action_value,
+        })
+
+    use_ai_fallback_cleanup = st.checkbox(
+        "ルールベースで自信が持てない問題だけAIに判定させる（APIコストが発生します）",
+        value=False, key="cleanup_use_ai"
+    )
+
+    if st.button("📸 プレビュー生成（まだ保存しない）", key="cleanup_preview_btn", type="primary"):
+        gemini_key = st.secrets.get("GEMINI_API_KEY", "") if use_ai_fallback_cleanup else None
+        with st.spinner("画像化・分野/単元判定中..."):
+            preview_results = pdf_ingestion.process_single_problem_pdfs(
+                file_entries,
+                university=university_name_cleanup,
+                img_dir=IMG_DIR,
+                category=cleanup_category,
+                api_key=gemini_key,
+                dry_run=True,
+            )
+        st.session_state["cleanup_preview_results"] = preview_results
+        excluded_count = sum(1 for e in file_entries if e["action"] == "exclude")
+        st.success(f"{len(preview_results)}件を取り込み対象として処理しました（{excluded_count}件は除外設定のためスキップ）。")
+
+    if st.session_state.get("cleanup_preview_results"):
+        st.markdown("#### 内容の確認")
+        for r in st.session_state["cleanup_preview_results"]:
+            item = r["item"]
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.image(os.path.join(IMG_DIR, item["image_file"]), use_container_width=True)
+            with col2:
+                st.write(f"**出題範囲**: {item['category']}")
+                st.write(f"**元ファイル**: {r['original_filename']}（{r['action']}）")
+                st.write(f"**分野**: {item['subject']}")
+                st.write(f"**単元**: {', '.join(item['unit']) if item['unit'] else '(未判定)'}")
+                st.write(f"**キーワード**: {', '.join(item['keywords'])}")
+            st.markdown("---")
+
+        if st.button("💾 この内容でデータベースに保存する", type="primary", key="cleanup_commit_btn"):
+            db = load_json(DB_PATH, [])
+            db.extend([r["item"] for r in st.session_state["cleanup_preview_results"]])
+            save_json(DB_PATH, db)
+            st.session_state["cleanup_preview_results"] = None
             st.success("データベースに保存しました！")
             st.rerun()
 '''
