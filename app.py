@@ -136,6 +136,29 @@ def set_custom_design():
         background-color: {c['bg_card']};
         border-right: 1px solid {c['border']};
     }}
+
+    /* ---- サイドバーを常に表示・折りたたみ不可にする ---- */
+    section[data-testid="stSidebar"] {{
+        display: block !important;
+        visibility: visible !important;
+        transform: none !important;   /* Streamlitは折りたたみ時にtransformで隠すことがあるため無効化 */
+        min-width: 260px !important;
+        max-width: 260px !important;
+        width: 260px !important;
+        position: relative !important;
+    }}
+
+    /* 折りたたみ用の矢印・ハンバーガーボタン一式を非表示に（Streamlitのバージョン違いに対応するため複数指定） */
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stSidebarCollapseButton"],
+    section[data-testid="stSidebar"] button[kind="header"],
+    button[title="Open sidebar"],
+    button[title="Close sidebar"] {{
+        display: none !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+    }}
     </style>
     """
     st.markdown(custom_css, unsafe_allow_html=True)
