@@ -159,6 +159,26 @@ def set_custom_design():
         visibility: hidden !important;
         pointer-events: none !important;
     }}
+
+    /* スマホ幅では260pxのサイドバーが画面の大半を占めてしまうため、
+       常時表示は維持しつつ幅だけ狭くしてメインコンテンツの表示領域を確保する */
+    @media (max-width: 640px) {{
+        section[data-testid="stSidebar"] {{
+            min-width: 180px !important;
+            max-width: 180px !important;
+            width: 180px !important;
+        }}
+    }}
+
+    /* Streamlitはスマホ幅などの狭い画面では、サイドバーを一時的なドロワーとして
+       メインコンテンツの上に重ねて表示する設計（stMainがposition:absoluteになる）。
+       サイドバーを常時表示にしたことで常に重なってしまうため、サイドバー分の
+       余白を常に確保する通常のレイアウトに固定する */
+    [data-testid="stMain"] {{
+        position: static !important;
+        margin-left: 0 !important;
+        width: 100% !important;
+    }}
     </style>
     """
     st.markdown(custom_css, unsafe_allow_html=True)
