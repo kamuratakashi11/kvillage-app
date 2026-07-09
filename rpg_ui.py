@@ -42,33 +42,6 @@ def render_copy_prompt_box(prompt_text, key):
     """, height=60)
 
 
-def _map_tile_html(icon, name, status_class, badge=""):
-    return f"""
-    <div class="tile {status_class}">
-        <div class="icon">{icon}</div>
-        <div class="name">{name}</div>
-        {badge}
-    </div>"""
-
-
-_MAP_STYLE = f"""
-<style>
-    body {{ margin:0; padding:0; background: transparent; font-family: 'Hiragino Kaku Gothic ProN','Hiragino Sans',Meiryo,sans-serif; }}
-    .grid {{ display:flex; flex-wrap:wrap; gap:14px; padding:10px; }}
-    .tile {{ width:120px; height:120px; border-radius:14px; display:flex; flex-direction:column; align-items:center; justify-content:center;
-             text-decoration:none; color:{theme.COLORS['text_primary']}; text-align:center; position:relative;
-             box-shadow: 0 1px 3px rgba(0,0,0,0.06); }}
-    .tile.unlocked {{ background: {theme.COLORS['accent_bg']}; border: 2px solid {theme.COLORS['accent']}; }}
-    .tile.locked {{ background: {theme.COLORS['locked_bg']}; border: 2px dashed {theme.COLORS['locked']}; color:{theme.COLORS['text_muted']}; }}
-    .tile.boss {{ width:150px; height:150px; background: {theme.COLORS['amber_bg']}; border: 3px solid {theme.COLORS['amber']}; }}
-    .tile.boss.defeated {{ background: {theme.COLORS['success_bg']}; border-color: {theme.COLORS['success']}; }}
-    .icon {{ font-size:36px; }}
-    .name {{ font-size:13px; margin-top:6px; font-weight:bold; }}
-    .badge {{ font-size:10px; margin-top:4px; background:rgba(0,0,0,0.06); padding:2px 6px; border-radius:8px; }}
-</style>
-"""
-
-
 def render_map(student_id, student_name):
     st.title("🗺️ 数学冒険マップ")
 
@@ -82,29 +55,71 @@ def render_map(student_id, student_name):
         _render_dungeon_map(student_id, student_name, selected_category)
 
 
+def _dungeon_button_css(index):
+    c = theme.COLORS
+    container_selector = (
+        f'div[data-testid="stElementContainer"]:has(div.dungeon-mk-{index}) '
+        f'+ div[data-testid="stElementContainer"]'
+    )
+    button_selector = f'{container_selector} div[data-testid="stButton"] button'
+    return f"""
+    {container_selector} {{
+        width: 100% !important;
+    }}
+    {container_selector} div[data-testid="stButton"] {{
+        width: 100% !important;
+    }}
+    {button_selector} {{
+        width: 100% !important;
+        height: 100px !important;
+        border-radius: 14px !important;
+        background: {c['accent_bg']} !important;
+        border: 2px solid {c['accent']} !important;
+        font-size: 40px !important;
+    }}
+    """
+
+
 def _render_dungeon_selector(student_id):
-    st.write("挑戦するダンジョン（出題範囲）を選ぼう！ダンジョンごとに撃破状況・レベル解放は別々に管理されます。")
+    st.write("挑戦するダンジョン（出題範囲）を選ぼう！ダンジョンごとに撃破状況・レベル解放は別々に管理されます。カードをクリックすると挑戦できます。")
 
     student = rpg_data.load_student_with_rpg_fields(student_id)
 
-    tiles_html = ""
-    for cat in rpg_data.CATEGORIES:
+    clicked_dungeon_id = None
+    button_css_rules = []
+    cols = st.columns(len(rpg_data.CATEGORIES))
+    for idx, (col, cat) in enumerate(zip(cols, rpg_data.CATEGORIES)):
         dp = student["dungeon_progress"][cat["id"]]
         defeated_units = sum(1 for v in dp["field_progress"].values() if v.get("defeated", 0) > 0)
         total_units = len(cat["units"])
-        badge = f'<div class="badge">{defeated_units}/{total_units} 分野撃破</div>'
+        badge_text = f"{defeated_units}/{total_units} 分野撃破"
         if dp["boss_defeated"]:
-            badge = '<div class="badge">🏆 制覇済み</div>'
-        tiles_html += _map_tile_html(cat["icon"], cat["name"], "unlocked", badge)
+            badge_text = "🏆 制覇済み"
 
-    map_html = f"<html><head>{_MAP_STYLE}</head><body><div class=\"grid\">{tiles_html}</div></body></html>"
-    components.html(map_html, height=180, scrolling=True)
+        with col:
+            st.markdown(f'<div class="dungeon-name">{cat["name"]}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="dungeon-mk dungeon-mk-{idx}"></div>', unsafe_allow_html=True)
+            if st.button(cat["icon"], key=f"dungeon_btn_{cat['id']}"):
+                clicked_dungeon_id = cat["id"]
+            st.markdown(f'<div class="dungeon-badge">{badge_text}</div>', unsafe_allow_html=True)
+        button_css_rules.append(_dungeon_button_css(idx))
 
-    st.markdown("---")
-    options = {f"{cat['icon']} {cat['name']}": cat["id"] for cat in rpg_data.CATEGORIES}
-    choice = st.selectbox("挑戦するダンジョンを選ぶ", list(options.keys()))
-    if st.button("このダンジョンに入る", type="primary"):
-        st.query_params["dungeon"] = options[choice]
+    st.markdown(
+        f"""
+        <style>
+            {''.join(button_css_rules)}
+            .dungeon-name {{ text-align:center; font-size:15px; font-weight:bold;
+                             color:{theme.COLORS['text_primary']}; margin-bottom:6px; }}
+            .dungeon-badge {{ text-align:center; font-size:12px; color:{theme.COLORS['text_secondary']};
+                              margin-top:6px; }}
+            div[data-testid="stButton"] {{ display:flex; justify-content:center; }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if clicked_dungeon_id:
+        st.query_params["dungeon"] = clicked_dungeon_id
         st.rerun()
 
 
