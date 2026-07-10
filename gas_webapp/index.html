@@ -27,8 +27,8 @@
   </div>
 <? } else { ?>
   <div class="card" id="uploadCard">
-    <h3>📷 解答の写真をアップロード</h3>
-    <input type="file" id="fileInput" accept="image/*">
+    <h3>📷 解答の写真・PDFをアップロード</h3>
+    <input type="file" id="fileInput" accept="image/*,application/pdf">
     <p><button id="gradeBtn">✏️ 添削してもらう</button></p>
     <p id="statusMsg"></p>
   </div>
@@ -60,7 +60,7 @@
       var fileInput = document.getElementById('fileInput');
       var file = fileInput.files[0];
       if (!file) {
-        document.getElementById('statusMsg').textContent = '写真を選択してください。';
+        document.getElementById('statusMsg').textContent = '写真またはPDFファイルを選択してください。';
         return;
       }
 
