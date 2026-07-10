@@ -90,25 +90,42 @@ function b64UrlEncodeBytes_(bytes) {
  * トークン形式: base64url(payload_json) + "." + base64url(hmac_sha256_signature)
  */
 function verifyToken(token, secret) {
-  if (!token || !secret || token.indexOf('.') === -1) return null;
+  return verifyTokenDetailed_(token, secret).sid;
+}
+
+/**
+ * verifyTokenの内部実装。失敗理由（reason）付きで返す。
+ * gradeAnswer側でエラーメッセージを具体的にするために使う。
+ */
+function verifyTokenDetailed_(token, secret) {
+  if (!token) return { sid: null, reason: 'トークンがありません' };
+  if (!secret) return { sid: null, reason: 'サーバー側にHMAC_SECRETスクリプトプロパティが設定されていません' };
+  if (token.indexOf('.') === -1) return { sid: null, reason: 'トークンの形式が不正です（.が含まれていません）' };
   var parts = token.split('.');
-  if (parts.length !== 2) return null;
+  if (parts.length !== 2) return { sid: null, reason: 'トークンの形式が不正です（区切りの数が不正）' };
   var payloadB64 = parts[0];
   var sigB64 = parts[1];
 
   var expectedSigBytes = Utilities.computeHmacSha256Signature(payloadB64, secret);
   var expectedSigB64 = b64UrlEncodeBytes_(expectedSigBytes);
-  if (expectedSigB64 !== sigB64) return null;
+  if (expectedSigB64 !== sigB64) {
+    return { sid: null, reason: '署名が一致しません（StreamlitのGAS_HMAC_SECRETと、このスクリプトのHMAC_SECRETが一致していない可能性があります）' };
+  }
 
   var payload;
   try {
     payload = JSON.parse(b64UrlDecodeToString_(payloadB64));
   } catch (e) {
-    return null;
+    return { sid: null, reason: 'ペイロードの解析に失敗しました: ' + e.message };
   }
-  if (!payload || !payload.sid || !payload.exp) return null;
-  if (payload.exp < Math.floor(Date.now() / 1000)) return null;
-  return payload.sid;
+  if (!payload || !payload.sid || !payload.exp) {
+    return { sid: null, reason: 'ペイロードにsidまたはexpが含まれていません' };
+  }
+  var now = Math.floor(Date.now() / 1000);
+  if (payload.exp < now) {
+    return { sid: null, reason: 'トークンが期限切れです（exp=' + payload.exp + ', now=' + now + ', 差=' + (now - payload.exp) + '秒）' };
+  }
+  return { sid: payload.sid, reason: null };
 }
 
 function doGet(e) {
@@ -132,10 +149,11 @@ function doGet(e) {
  */
 function gradeAnswer(token, base64Image, mimeType) {
   var secret = getSecret_('HMAC_SECRET');
-  var studentId = verifyToken(token, secret);
-  if (!studentId) {
-    throw new Error('セッションの有効期限が切れました。Streamlitの画面を再読み込みしてください。');
+  var verified = verifyTokenDetailed_(token, secret);
+  if (!verified.sid) {
+    throw new Error('セッションの検証に失敗しました（' + verified.reason + '）。Streamlitの画面を再読み込みしてください。');
   }
+  var studentId = verified.sid;
 
   var resultText = callGemini_(base64Image, mimeType);
   var docUrl = appendToStudentDoc_(studentId, resultText);
