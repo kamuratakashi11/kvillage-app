@@ -597,14 +597,18 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
                     )
 
                     if answer_img_for_review is None:
-                        st.caption("解答の画像がこのセッションに残っていません。もう一度、この問題の解答写真をアップロードしてください。")
+                        st.caption("解答の画像がこのセッションに残っていません。もう一度、この問題の解答写真かPDFをアップロードしてください。")
                         reuploaded = st.file_uploader(
-                            f"第{i+1}問の解答写真を再アップロード",
-                            type=["png", "jpg", "jpeg"],
+                            f"第{i+1}問の解答写真・PDFを再アップロード",
+                            type=["png", "jpg", "jpeg", "pdf"],
                             key=f"reupload_{battle_key}_{i}",
                         )
                         if reuploaded:
-                            answer_img_for_review = Image.open(reuploaded)
+                            if reuploaded.name.lower().endswith(".pdf"):
+                                pages = convert_pdf_to_image(reuploaded)
+                                answer_img_for_review = pages[0] if pages else None
+                            else:
+                                answer_img_for_review = Image.open(reuploaded)
 
                     if st.button(
                         f"📖 第{i+1}問をくわしく添削してほしい（チケット1枚消費）",
