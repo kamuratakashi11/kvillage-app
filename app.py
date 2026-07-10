@@ -40,9 +40,10 @@ if not os.path.exists(IMG_DIR):
             with zipfile.ZipFile(zf, 'r') as zip_ref:
                 zip_ref.extractall(BASE_DIR)
 
-# マスターパスワード（先生専用）
-MASTER_PASSWORD = "kvillage_master"
-SECRET_WORD = "kvillage2026" # 教室の合言葉
+# マスターパスワード（先生専用）・教室の合言葉は、ソースコードに直接書かず
+# Secretsで管理する（このリポジトリは公開設定のため、書くとGitHub上で誰でも読めてしまう）
+MASTER_PASSWORD = st.secrets.get("MASTER_PASSWORD", "")
+SECRET_WORD = st.secrets.get("SECRET_WORD", "")  # 教室の合言葉
 
 import io
 import base64
@@ -192,7 +193,7 @@ def check_password_and_login():
     query_params = st.query_params
     if "token" in query_params:
         token = query_params["token"]
-        if token == MASTER_PASSWORD:
+        if MASTER_PASSWORD and token == MASTER_PASSWORD:
             if not st.session_state.get("logged_in"):
                 st.session_state["logged_in"] = True
                 st.session_state["student_id"] = "master"
@@ -220,7 +221,7 @@ def check_password_and_login():
             st.markdown("### 登録済みのパスワードでログイン")
             login_pass = st.text_input("パスワード", type="password", key="login_pass")
             if st.button("ログイン", key="btn_login"):
-                if login_pass == MASTER_PASSWORD:
+                if MASTER_PASSWORD and login_pass == MASTER_PASSWORD:
                     st.session_state["logged_in"] = True
                     st.session_state["student_id"] = "master"
                     st.session_state["student_name"] = "Kvillage先生"
