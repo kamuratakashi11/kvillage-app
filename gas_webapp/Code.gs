@@ -109,6 +109,10 @@ function verifyTokenDetailed_(token, secret) {
   var expectedSigBytes = Utilities.computeHmacSha256Signature(payloadB64, secret);
   var expectedSigB64 = b64UrlEncodeBytes_(expectedSigBytes);
   if (expectedSigB64 !== sigB64) {
+    console.log('verifyToken debug: payloadB64=' + payloadB64);
+    console.log('verifyToken debug: sigB64 (received)=' + sigB64 + ' (len=' + sigB64.length + ')');
+    console.log('verifyToken debug: expectedSigB64 (computed)=' + expectedSigB64 + ' (len=' + expectedSigB64.length + ')');
+    console.log('verifyToken debug: secret length=' + secret.length);
     return { sid: null, reason: '署名が一致しません（StreamlitのGAS_HMAC_SECRETと、このスクリプトのHMAC_SECRETが一致していない可能性があります）' };
   }
 
