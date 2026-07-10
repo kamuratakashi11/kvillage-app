@@ -293,6 +293,10 @@ def _battle_unit_info(category_id, unit_id):
 
 def _pop_battle_setup_keys(battle_key):
     st.session_state.pop(f"battle_num_questions_{battle_key}", None)
+    st.session_state.pop(f"battle_university_{battle_key}", None)
+
+
+NO_UNIVERSITY_FILTER = "指定しない（全体から出題）"
 
 
 def _render_battle_setup(category_id, unit_id, student_id):
@@ -316,10 +320,25 @@ def _render_battle_setup(category_id, unit_id, student_id):
 
     st.title(f"{cat['icon']} {cat['name']} － ⚔️ {enemy_label} に挑む")
 
-    available = rpg_data.count_available_battle_problems(category_id, unit_topic_name)
-    if available == 0:
+    total_available = rpg_data.count_available_battle_problems(category_id, unit_topic_name)
+    if total_available == 0:
         st.warning("この分野にはまだバトル用に準備された問題がありません。先生に「🏷️ 問題のタグ付け作業」ページで、バトル用データ（難易度・正解）を生成してもらってください。")
         return
+
+    universities = rpg_data.get_available_universities(category_id, unit_topic_name)
+    selected_university = None
+    if len(universities) >= 2:
+        options = [NO_UNIVERSITY_FILTER] + [f"{name}（{n}問）" for name, n in universities]
+        choice = st.selectbox("出題範囲を選ぼう（大学・模試ごとに難易度が違うよ）", options, key=f"battle_univ_select_{battle_key}")
+        if choice != NO_UNIVERSITY_FILTER:
+            selected_university = universities[options.index(choice) - 1][0]
+
+    available = rpg_data.count_available_battle_problems(category_id, unit_topic_name, university=selected_university)
+    if selected_university and available == 0:
+        st.warning(f"「{selected_university}」の問題は、この分野ではまだ準備されていません。別の出題範囲を選ぶか、「{NO_UNIVERSITY_FILTER}」を選んでください。")
+        return
+    if selected_university and available < 5:
+        st.info(f"「{selected_university}」の問題は、この分野では現在 **{available}問** しかありません。出題内容が偏る可能性があります。")
 
     st.write(f"この分野で挑戦できる問題は最大 **{available}問** あります。何問挑戦するか選ぼう。")
     max_count = min(10, available)
@@ -328,6 +347,7 @@ def _render_battle_setup(category_id, unit_id, student_id):
 
     if st.button("⚔️ 挑戦をはじめる", type="primary", key=f"start_battle_{battle_key}"):
         st.session_state[f"battle_num_questions_{battle_key}"] = count
+        st.session_state[f"battle_university_{battle_key}"] = selected_university
         st.rerun()
 
 
@@ -454,13 +474,14 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
     st.markdown("---")
 
     if problems_key not in st.session_state:
-        available = rpg_data.count_available_battle_problems(category_id, unit_topic_name)
+        selected_university = st.session_state.get(f"battle_university_{battle_key}")
+        available = rpg_data.count_available_battle_problems(category_id, unit_topic_name, university=selected_university)
         if available == 0:
             st.warning("この分野にはまだバトル用に準備された問題がありません。先生に「🏷️ 問題のタグ付け作業」ページで、バトル用データ（難易度・正解）を生成してもらってください。")
             return
 
         count = min(num_questions or 5, available)
-        st.session_state[problems_key] = rpg_data.pick_battle_problems(category_id, unit_topic_name, count)
+        st.session_state[problems_key] = rpg_data.pick_battle_problems(category_id, unit_topic_name, count, university=selected_university)
         st.session_state.pop(results_key, None)
         _persist_battle_state()
 
