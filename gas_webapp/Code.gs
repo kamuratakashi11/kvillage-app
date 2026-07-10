@@ -137,6 +137,10 @@ function doGet(e) {
   var secret = getSecret_('HMAC_SECRET');
   var studentId = verifyToken(token, secret);
 
+  console.log('doGet debug: token=' + token);
+  console.log('doGet debug: secret length=' + (secret ? secret.length : 0));
+  console.log('doGet debug: valid=' + !!studentId);
+
   var template = HtmlService.createTemplateFromFile('index');
   template.valid = !!studentId;
   template.token = token;
