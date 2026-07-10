@@ -605,16 +605,22 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
                                             api_key,
                                             problem.get("answer_type", "value"),
                                         )
-                                        st.session_state[review_text_key] = review_text
 
-                                        gas_webapp_url = st.secrets.get("GAS_WEBAPP_URL", "")
-                                        gas_hmac_secret = st.secrets.get("GAS_HMAC_SECRET", "")
-                                        # 解答画像が問題と対応していない場合、Geminiは学習記録（【単元】〜）を
-                                        # 出力しない指示になっているため、その場合はDocsへの保存自体をスキップする
-                                        if gas_webapp_url and gas_hmac_secret and "【単元】" in review_text:
-                                            st.session_state[review_doc_key] = gas_client.append_review_to_docs(
-                                                gas_webapp_url, gas_hmac_secret, student_id, review_text
-                                            )
+                                        # 解答画像が問題と対応していないとGeminiが判断した場合は、
+                                        # 表示用テキストからマーカーを取り除きつつ、分析ノートへの保存はスキップする
+                                        is_mismatch = review_text.lstrip().startswith(gemini_service.MISMATCH_MARKER)
+                                        display_text = review_text
+                                        if is_mismatch:
+                                            display_text = review_text.lstrip().removeprefix(gemini_service.MISMATCH_MARKER).lstrip("\n").lstrip()
+                                        st.session_state[review_text_key] = display_text
+
+                                        if not is_mismatch:
+                                            gas_webapp_url = st.secrets.get("GAS_WEBAPP_URL", "")
+                                            gas_hmac_secret = st.secrets.get("GAS_HMAC_SECRET", "")
+                                            if gas_webapp_url and gas_hmac_secret:
+                                                st.session_state[review_doc_key] = gas_client.append_review_to_docs(
+                                                    gas_webapp_url, gas_hmac_secret, student_id, review_text
+                                                )
                                         st.rerun()
                                     except Exception as e:
                                         st.error(gemini_service.describe_gemini_error(e))
