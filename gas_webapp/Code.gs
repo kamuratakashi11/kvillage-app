@@ -164,9 +164,25 @@ function gradeAnswer(token, base64Image, mimeType) {
   var studentId = verified.sid;
 
   var resultText = callGemini_(base64Image, mimeType);
-  var docUrl = appendToStudentDoc_(studentId, resultText);
+  var docUrl = appendToStudentDoc_(studentId, extractStudyRecord_(resultText));
 
   return { resultText: resultText, docUrl: docUrl };
+}
+
+/**
+ * Geminiの応答（対話・添削の説明文＋末尾の学習記録）から、
+ * 【日付】〜【今後の学習方針】の学習記録部分だけを取り出す。
+ * Docsにはこの部分だけを書き込み、説明文でページが埋まらないようにする。
+ * 【日付】が見つからない場合は、想定外の出力形式とみなし全文をそのまま返す（記録の取りこぼしを防ぐため）。
+ */
+function extractStudyRecord_(resultText) {
+  var startIdx = resultText.indexOf('【日付】');
+  if (startIdx === -1) {
+    return resultText;
+  }
+  var endIdx = resultText.indexOf('📝', startIdx);
+  var record = endIdx === -1 ? resultText.substring(startIdx) : resultText.substring(startIdx, endIdx);
+  return record.trim();
 }
 
 function callGemini_(base64Image, mimeType) {
