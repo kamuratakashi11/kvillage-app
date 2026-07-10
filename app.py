@@ -84,6 +84,14 @@ def set_custom_design():
     #viewerBadge_link__1SllNM {{display: none !important;}}
     .viewerBadge_container__1JCIV {{display: none !important;}}
 
+    /* Streamlit Community Cloudの右上ツールバー（Share/Star/Fork/GitHubリンク等）を隠す */
+    #MainMenu {{visibility: hidden !important;}}
+    [data-testid="stToolbar"] {{visibility: hidden !important; display: none !important;}}
+    [data-testid="stToolbarActions"] {{visibility: hidden !important; display: none !important;}}
+    [data-testid="stAppDeployButton"] {{display: none !important;}}
+    .stAppDeployButton {{display: none !important;}}
+    a[href*="github.com"][data-testid="stBaseButton-header"] {{display: none !important;}}
+
     /* 画像のフルスクリーンボタンを隠す（あらゆる環境・言語に対応した最強のセレクタ） */
     button[title="View fullscreen"],
     button[title="全画面表示"],
