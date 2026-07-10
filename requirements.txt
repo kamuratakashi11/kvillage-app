@@ -6,3 +6,4 @@ google-generativeai
 Pillow
 reportlab
 firebase-admin
+requests

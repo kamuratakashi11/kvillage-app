@@ -6,6 +6,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image
 
+import gas_client
 import gemini_service
 import rpg_data
 import theme
@@ -431,10 +432,12 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
         st.markdown(f"**{student_name}さん** HP: {max(0, player_hp)} / {rpg_data.PLAYER_MAX_HP}")
         st.progress(max(0.0, player_hp / rpg_data.PLAYER_MAX_HP))
 
+    answer_images_key = f"battle_answer_images_{battle_key}"
+
     def _reset_battle_session():
         keys_to_remove = [
             k for k in list(st.session_state.keys())
-            if k in (hp_key, player_hp_key, problems_key, results_key) or k.startswith(reviews_prefix)
+            if k in (hp_key, player_hp_key, problems_key, results_key, answer_images_key) or k.startswith(reviews_prefix)
         ]
         for k in keys_to_remove:
             del st.session_state[k]
@@ -550,6 +553,9 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
                             for problem, image in pairs:
                                 results.append(gemini_service.judge_battle_answer(image, problem["correct_answer"], api_key, problem.get("answer_type", "value")))
                         st.session_state[results_key] = results
+                        # 「くわしく添削してほしい」ボタン用に、解答画像をこのブラウザセッション内で保持しておく
+                        # （ページを閉じて開き直した場合は失われるため、その場合は再アップロードを求める）
+                        st.session_state[answer_images_key] = answer_images
 
                         total_damage = sum(
                             p["exp_value"] * rpg_data.DAMAGE_PER_CORRECT_MULTIPLIER
@@ -579,25 +585,72 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
             else:
                 st.warning(f"第{i+1}問: 😣 不正解 (読み取った解答: {result.get('extracted_answer') or '読み取れませんでした'})")
 
-                review_flag_key = f"{reviews_prefix}{i}"
-                if st.button(f"📖 第{i+1}問をくわしく添削してほしい", key=f"review_btn_{battle_key}_{i}"):
-                    st.session_state[review_flag_key] = gemini_service.generate_battle_review_prompt(
-                        unit_topic_name, problem["correct_answer"], problem.get("answer_type", "value")
+                review_text_key = f"{reviews_prefix}text_{i}"
+                review_doc_key = f"{reviews_prefix}doc_{i}"
+
+                if review_text_key not in st.session_state:
+                    stored_answer_images = st.session_state.get(answer_images_key)
+                    answer_img_for_review = (
+                        stored_answer_images[i]
+                        if stored_answer_images and i < len(stored_answer_images)
+                        else None
                     )
 
-                if review_flag_key in st.session_state:
-                    st.info("①下の「問題の画像を保存する」ボタンで問題画像を保存 → ②Gemini (gemini.google.com) を開く → ③保存した問題画像とあなたの解答の写真の両方を添付 → ④下のプロンプトをコピーして貼り付けて送信してください。")
-                    img_path = problem_img_paths[i]
-                    if os.path.exists(img_path):
-                        with open(img_path, "rb") as f:
-                            st.download_button(
-                                f"📥 第{i+1}問の画像を保存する",
-                                data=f.read(),
-                                file_name=problem["image_file"],
-                                mime="image/png",
-                                key=f"dl_problem_{battle_key}_{i}",
-                            )
-                    render_copy_prompt_box(st.session_state[review_flag_key], key=f"review_{battle_key}_{i}")
+                    if answer_img_for_review is None:
+                        st.caption("解答の画像がこのセッションに残っていません。もう一度、この問題の解答写真をアップロードしてください。")
+                        reuploaded = st.file_uploader(
+                            f"第{i+1}問の解答写真を再アップロード",
+                            type=["png", "jpg", "jpeg"],
+                            key=f"reupload_{battle_key}_{i}",
+                        )
+                        if reuploaded:
+                            answer_img_for_review = Image.open(reuploaded)
+
+                    if st.button(
+                        f"📖 第{i+1}問をくわしく添削してほしい（チケット1枚消費）",
+                        key=f"review_btn_{battle_key}_{i}",
+                        disabled=(answer_img_for_review is None),
+                    ):
+                        if not api_key:
+                            st.error("システムエラー: 裏側のAI設定（APIキー）が完了していません。Kvillage先生に報告してください。")
+                        elif not consume_tickets(student_id, 1):
+                            st.error("⚠️ チケットが足りません！明日ログインしてボーナスチケットを受け取ってください。")
+                        else:
+                            img_path = problem_img_paths[i]
+                            if not os.path.exists(img_path):
+                                st.error(f"第{i+1}問の問題画像が見つかりませんでした。")
+                            else:
+                                with st.spinner("Kvillage先生が添削中です…（30秒ほどかかることがあります）"):
+                                    try:
+                                        review_text = gemini_service.generate_battle_review_and_record(
+                                            unit_topic_name,
+                                            problem["correct_answer"],
+                                            Image.open(img_path),
+                                            answer_img_for_review,
+                                            api_key,
+                                            problem.get("answer_type", "value"),
+                                        )
+                                        st.session_state[review_text_key] = review_text
+
+                                        gas_webapp_url = st.secrets.get("GAS_WEBAPP_URL", "")
+                                        gas_hmac_secret = st.secrets.get("GAS_HMAC_SECRET", "")
+                                        if gas_webapp_url and gas_hmac_secret:
+                                            st.session_state[review_doc_key] = gas_client.append_review_to_docs(
+                                                gas_webapp_url, gas_hmac_secret, student_id, review_text
+                                            )
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(gemini_service.describe_gemini_error(e))
+
+                if review_text_key in st.session_state:
+                    st.markdown(st.session_state[review_text_key])
+                    doc_result = st.session_state.get(review_doc_key)
+                    if doc_result:
+                        doc_ok, doc_url_or_err = doc_result
+                        if doc_ok:
+                            st.success(f"📋 分析ノートに保存しました: {doc_url_or_err}")
+                        else:
+                            st.warning(f"分析ノートへの保存に失敗しました（添削結果は上に表示されています）: {doc_url_or_err}")
 
         st.markdown("---")
         st.subheader("🧠 NotebookLMで弱点を分析してもらおう")
