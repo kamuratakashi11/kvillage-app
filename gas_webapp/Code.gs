@@ -198,7 +198,11 @@ function callGemini_(base64Image, mimeType) {
         { text: CORRECTION_PROMPT },
         { inline_data: { mime_type: mimeType || 'image/jpeg', data: base64Image } }
       ]
-    }]
+    }],
+    // このタスクでは内部の「思考」ステップは不要なため、その分のトークン課金を避けるためオフにする
+    generationConfig: {
+      thinkingConfig: { thinkingBudget: 0 }
+    }
   };
 
   var response = UrlFetchApp.fetch(url, {
