@@ -3,6 +3,15 @@
 <head>
   <base target="_top">
   <meta charset="utf-8">
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['$', '$']],
+        displayMath: [['$$', '$$']]
+      }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" defer></script>
   <style>
     body {
       font-family: -apple-system, 'Hiragino Kaku Gothic ProN', Meiryo, sans-serif;
@@ -27,8 +36,8 @@
   </div>
 <? } else { ?>
   <div class="card" id="uploadCard">
-    <h3>📷 解答の写真をアップロード</h3>
-    <input type="file" id="fileInput" accept="image/*">
+    <h3>📷 解答の写真・PDFをアップロード</h3>
+    <input type="file" id="fileInput" accept="image/*,application/pdf">
     <p><button id="gradeBtn">✏️ 添削してもらう</button></p>
     <p id="statusMsg"></p>
   </div>
@@ -42,11 +51,15 @@
     <div id="resultBox"></div>
 
     <p><button id="askMoreBtn" class="secondary">💬 追加で質問する</button></p>
+    <div id="manualCopyBox" style="display:none;">
+      <p>自動コピーができなかったため、下の内容を手動でコピーしてGeminiに貼り付けてください。</p>
+      <textarea id="manualCopyText" readonly style="width:100%; height:160px;"></textarea>
+    </div>
   </div>
 <? } ?>
 
 <script>
-  var TOKEN = <?= JSON.stringify(token) ?>;
+  var TOKEN = <?!= JSON.stringify(token) ?>;
   var lastResultText = '';
 
   var QUESTION_TEMPLATE =
@@ -60,7 +73,7 @@
       var fileInput = document.getElementById('fileInput');
       var file = fileInput.files[0];
       if (!file) {
-        document.getElementById('statusMsg').textContent = '写真を選択してください。';
+        document.getElementById('statusMsg').textContent = '写真またはPDFファイルを選択してください。';
         return;
       }
 
@@ -79,6 +92,9 @@
             document.getElementById('docLink').textContent = res.docUrl;
             document.getElementById('docLink').href = res.docUrl;
             document.getElementById('resultCard').style.display = 'block';
+            if (window.MathJax && window.MathJax.typesetPromise) {
+              window.MathJax.typesetPromise([document.getElementById('resultBox')]);
+            }
           })
           .withFailureHandler(function (err) {
             gradeBtn.disabled = false;
@@ -90,13 +106,55 @@
     });
   }
 
+  function copyWithExecCommand_(text) {
+    var textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    var ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch (e) {
+      ok = false;
+    }
+    document.body.removeChild(textarea);
+    return ok;
+  }
+
+  function showManualCopyBox_(text) {
+    document.getElementById('manualCopyBox').style.display = 'block';
+    var textarea = document.getElementById('manualCopyText');
+    textarea.value = text;
+    textarea.focus();
+    textarea.select();
+  }
+
   var askMoreBtn = document.getElementById('askMoreBtn');
   if (askMoreBtn) {
     askMoreBtn.addEventListener('click', function () {
       var combined = lastResultText + '\n\n' + QUESTION_TEMPLATE;
-      navigator.clipboard.writeText(combined).then(function () {
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(combined).then(function () {
+          document.getElementById('statusMsg').textContent = 'コピーしました！Geminiに貼り付けて質問してください。';
+        }).catch(function () {
+          if (copyWithExecCommand_(combined)) {
+            document.getElementById('statusMsg').textContent = 'コピーしました！Geminiに貼り付けて質問してください。';
+          } else {
+            showManualCopyBox_(combined);
+            document.getElementById('statusMsg').textContent = '自動コピーができませんでした。下の欄から手動でコピーしてください。';
+          }
+        });
+      } else if (copyWithExecCommand_(combined)) {
         document.getElementById('statusMsg').textContent = 'コピーしました！Geminiに貼り付けて質問してください。';
-      });
+      } else {
+        showManualCopyBox_(combined);
+        document.getElementById('statusMsg').textContent = '自動コピーができませんでした。下の欄から手動でコピーしてください。';
+      }
+
       window.open('https://gemini.google.com/app', '_blank');
     });
   }

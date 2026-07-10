@@ -60,13 +60,6 @@ var CORRECTION_PROMPT = [
   '【解答の状況】',
   '【分析された弱点・思考の癖】',
   '【今後の学習方針】',
-  '',
-  '📝 **次のステップ**：',
-  '上のデータをコピーして、自分の分析ノートに貼り付けて今日の記録を残しましょう！',
-  '👉 [📋 Google Docsを開く](https://docs.google.com/document/u/0/)',
-  '',
-  '週末はNotebookLMで復習テストを作ってみてね。',
-  '👉 [🧠 NotebookLMを開く](https://notebooklm.google.com/)',
   '---'
 ].join('\n');
 
@@ -90,31 +83,56 @@ function b64UrlEncodeBytes_(bytes) {
  * トークン形式: base64url(payload_json) + "." + base64url(hmac_sha256_signature)
  */
 function verifyToken(token, secret) {
-  if (!token || !secret || token.indexOf('.') === -1) return null;
+  return verifyTokenDetailed_(token, secret).sid;
+}
+
+/**
+ * verifyTokenの内部実装。失敗理由（reason）付きで返す。
+ * gradeAnswer側でエラーメッセージを具体的にするために使う。
+ */
+function verifyTokenDetailed_(token, secret) {
+  if (!token) return { sid: null, reason: 'トークンがありません' };
+  if (!secret) return { sid: null, reason: 'サーバー側にHMAC_SECRETスクリプトプロパティが設定されていません' };
+  if (token.indexOf('.') === -1) return { sid: null, reason: 'トークンの形式が不正です（.が含まれていません）' };
   var parts = token.split('.');
-  if (parts.length !== 2) return null;
+  if (parts.length !== 2) return { sid: null, reason: 'トークンの形式が不正です（区切りの数が不正）' };
   var payloadB64 = parts[0];
   var sigB64 = parts[1];
 
   var expectedSigBytes = Utilities.computeHmacSha256Signature(payloadB64, secret);
   var expectedSigB64 = b64UrlEncodeBytes_(expectedSigBytes);
-  if (expectedSigB64 !== sigB64) return null;
+  if (expectedSigB64 !== sigB64) {
+    console.log('verifyToken debug: payloadB64=' + payloadB64);
+    console.log('verifyToken debug: sigB64 (received)=' + sigB64 + ' (len=' + sigB64.length + ')');
+    console.log('verifyToken debug: expectedSigB64 (computed)=' + expectedSigB64 + ' (len=' + expectedSigB64.length + ')');
+    console.log('verifyToken debug: secret length=' + secret.length);
+    return { sid: null, reason: '署名が一致しません（StreamlitのGAS_HMAC_SECRETと、このスクリプトのHMAC_SECRETが一致していない可能性があります）' };
+  }
 
   var payload;
   try {
     payload = JSON.parse(b64UrlDecodeToString_(payloadB64));
   } catch (e) {
-    return null;
+    return { sid: null, reason: 'ペイロードの解析に失敗しました: ' + e.message };
   }
-  if (!payload || !payload.sid || !payload.exp) return null;
-  if (payload.exp < Math.floor(Date.now() / 1000)) return null;
-  return payload.sid;
+  if (!payload || !payload.sid || !payload.exp) {
+    return { sid: null, reason: 'ペイロードにsidまたはexpが含まれていません' };
+  }
+  var now = Math.floor(Date.now() / 1000);
+  if (payload.exp < now) {
+    return { sid: null, reason: 'トークンが期限切れです（exp=' + payload.exp + ', now=' + now + ', 差=' + (now - payload.exp) + '秒）' };
+  }
+  return { sid: payload.sid, reason: null };
 }
 
 function doGet(e) {
   var token = (e && e.parameter && e.parameter.token) || '';
   var secret = getSecret_('HMAC_SECRET');
   var studentId = verifyToken(token, secret);
+
+  console.log('doGet debug: token=' + token);
+  console.log('doGet debug: secret length=' + (secret ? secret.length : 0));
+  console.log('doGet debug: valid=' + !!studentId);
 
   var template = HtmlService.createTemplateFromFile('index');
   template.valid = !!studentId;
@@ -132,15 +150,33 @@ function doGet(e) {
  */
 function gradeAnswer(token, base64Image, mimeType) {
   var secret = getSecret_('HMAC_SECRET');
-  var studentId = verifyToken(token, secret);
-  if (!studentId) {
-    throw new Error('セッションの有効期限が切れました。Streamlitの画面を再読み込みしてください。');
+  var verified = verifyTokenDetailed_(token, secret);
+  if (!verified.sid) {
+    throw new Error('セッションの検証に失敗しました（' + verified.reason + '）。Streamlitの画面を再読み込みしてください。');
   }
+  var studentId = verified.sid;
 
   var resultText = callGemini_(base64Image, mimeType);
-  var docUrl = appendToStudentDoc_(studentId, resultText);
+  var docUrl = appendToStudentDoc_(studentId, extractStudyRecord_(resultText));
 
   return { resultText: resultText, docUrl: docUrl };
+}
+
+/**
+ * Geminiの応答（対話・添削の説明文＋末尾の学習記録）から、
+ * 【日付】〜【今後の学習方針】の学習記録部分だけを取り出す。
+ * Docsにはこの部分だけを書き込み、説明文でページが埋まらないようにする。
+ * 【日付】が見つからない場合は、想定外の出力形式とみなし全文をそのまま返す（記録の取りこぼしを防ぐため）。
+ */
+function extractStudyRecord_(resultText) {
+  var startIdx = resultText.indexOf('【日付】');
+  if (startIdx === -1) {
+    return resultText;
+  }
+  var record = resultText.substring(startIdx);
+  // 末尾の区切り線（---）が含まれていれば取り除く
+  record = record.replace(/-{3,}\s*$/, '');
+  return record.trim();
 }
 
 function callGemini_(base64Image, mimeType) {
