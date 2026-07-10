@@ -2,9 +2,13 @@
  * kvillage - AI自動添削 GASバックエンド
  *
  * 【事前準備】このプロジェクトの「プロジェクトの設定」→「スクリプト プロパティ」に
- * 以下の2つを設定してください:
+ * 以下を設定してください:
  *   GEMINI_API_KEY : Gemini APIキー
  *   HMAC_SECRET    : Streamlit側のsecrets.tomlに設定する GAS_HMAC_SECRET と同じ値
+ *   DOCS_FOLDER_ID : （任意）新規作成する分析ノートを保存するGoogle DriveのフォルダID。
+ *                    未設定の場合はマイドライブ直下に作成される。
+ *                    フォルダのURL（https://drive.google.com/drive/u/0/folders/XXXXXXXX）の
+ *                    末尾のXXXXXXXX部分をコピーして設定する。
  *
  * 【デプロイ設定】「デプロイ」→「新しいデプロイ」→ 種類「ウェブアプリ」
  *   実行するユーザー: 自分（Me）
@@ -243,8 +247,15 @@ function appendToStudentDoc_(studentId, resultText) {
     doc = DocumentApp.create('数学 学習記録ノート（' + studentId + '）');
     docId = doc.getId();
     props.setProperty(propKey, docId);
-    DriveApp.getFileById(docId).setSharing(
-        DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var file = DriveApp.getFileById(docId);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    var folderId = getSecret_('DOCS_FOLDER_ID');
+    if (folderId) {
+      var folder = DriveApp.getFolderById(folderId);
+      folder.addFile(file);
+      DriveApp.getRootFolder().removeFile(file);
+    }
   }
 
   var body = doc.getBody();
