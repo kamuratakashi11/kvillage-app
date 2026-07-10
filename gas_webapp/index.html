@@ -68,6 +68,50 @@
     '引き続き「Kvillage先生」として、です・ます調の温かいトーンで、' +
     'ヒントを出しながら励ましつつ教えてください。';
 
+  var MAX_IMAGE_DIMENSION = 1600;
+  var IMAGE_JPEG_QUALITY = 0.8;
+
+  /**
+   * アップロードされたファイルを送信用のbase64に変換する。
+   * 画像の場合は、Gemini APIのコスト（トークン数は解像度に比例）を抑えるため、
+   * 長辺がMAX_IMAGE_DIMENSIONを超えないようリサイズしてJPEG圧縮する。
+   * PDF等の画像以外はそのまま読み込む。
+   */
+  function prepareFileForUpload_(file) {
+    return new Promise(function (resolve, reject) {
+      if (file.type.indexOf('image/') !== 0) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          resolve({ base64: reader.result.split(',')[1], mimeType: file.type });
+        };
+        reader.onerror = function () {
+          reject(new Error('ファイルの読み込みに失敗しました'));
+        };
+        reader.readAsDataURL(file);
+        return;
+      }
+
+      var img = new Image();
+      var objectUrl = URL.createObjectURL(file);
+      img.onload = function () {
+        URL.revokeObjectURL(objectUrl);
+        var scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(img.width, img.height));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        var dataUrl = canvas.toDataURL('image/jpeg', IMAGE_JPEG_QUALITY);
+        resolve({ base64: dataUrl.split(',')[1], mimeType: 'image/jpeg' });
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error('画像の読み込みに失敗しました'));
+      };
+      img.src = objectUrl;
+    });
+  }
+
   var gradeBtn = document.getElementById('gradeBtn');
   if (gradeBtn) {
     gradeBtn.addEventListener('click', function () {
@@ -81,9 +125,7 @@
       gradeBtn.disabled = true;
       document.getElementById('statusMsg').textContent = '添削中です…（30秒ほどかかることがあります）';
 
-      var reader = new FileReader();
-      reader.onload = function () {
-        var base64 = reader.result.split(',')[1];
+      prepareFileForUpload_(file).then(function (prepared) {
         google.script.run
           .withSuccessHandler(function (res) {
             gradeBtn.disabled = false;
@@ -101,9 +143,11 @@
             gradeBtn.disabled = false;
             document.getElementById('statusMsg').textContent = 'エラー: ' + err.message;
           })
-          .gradeAnswer(TOKEN, base64, file.type);
-      };
-      reader.readAsDataURL(file);
+          .gradeAnswer(TOKEN, prepared.base64, prepared.mimeType);
+      }).catch(function (err) {
+        gradeBtn.disabled = false;
+        document.getElementById('statusMsg').textContent = 'エラー: ' + err.message;
+      });
     });
   }
 
