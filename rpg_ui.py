@@ -3,44 +3,15 @@ import io
 import os
 
 import streamlit as st
-import streamlit.components.v1 as components
 from PIL import Image
 
 import gas_client
 import gemini_service
 import rpg_data
 import theme
-from image_utils import convert_pdf_to_image, image_files_to_pdf_bytes, build_labeled_pdf
+from image_utils import convert_pdf_to_image, image_files_to_pdf_bytes
 from storage import IMG_DIR
 from student_state import consume_tickets, update_student_exp
-
-
-def render_copy_prompt_box(prompt_text, key):
-    """コピー用プロンプトをテキストエリア＋ワンクリックコピーボタンで表示する"""
-    st.text_area("コピー用プロンプト（下のボタンでもコピーできます）", prompt_text, height=260, key=f"prompt_area_{key}")
-    b64 = base64.b64encode(prompt_text.encode("utf-8")).decode("ascii")
-    c = theme.COLORS
-    components.html(f"""
-    <div style="font-family: sans-serif;">
-      <button id="copy_btn_{key}" style="background:{c['accent']};color:#fff;border:none;border-radius:8px;padding:10px 18px;font-size:14px;cursor:pointer;">📋 プロンプトをコピーする</button>
-      <span id="copied_msg_{key}" style="margin-left:10px;color:{c['success']};"></span>
-    </div>
-    <script>
-      function b64DecodeUnicode_{key}(str) {{
-        return decodeURIComponent(atob(str).split('').map(function(c) {{
-          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-        }}).join(''));
-      }}
-      document.getElementById("copy_btn_{key}").addEventListener("click", function() {{
-        const text = b64DecodeUnicode_{key}("{b64}");
-        navigator.clipboard.writeText(text).then(function() {{
-          document.getElementById("copied_msg_{key}").innerText = "コピーしました！";
-        }}, function() {{
-          document.getElementById("copied_msg_{key}").innerText = "コピーできませんでした。上のテキストを手動で選択してコピーしてください。";
-        }});
-      }});
-    </script>
-    """, height=60)
 
 
 def render_map(student_id, student_name):
@@ -638,7 +609,9 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
 
                                         gas_webapp_url = st.secrets.get("GAS_WEBAPP_URL", "")
                                         gas_hmac_secret = st.secrets.get("GAS_HMAC_SECRET", "")
-                                        if gas_webapp_url and gas_hmac_secret:
+                                        # 解答画像が問題と対応していない場合、Geminiは学習記録（【単元】〜）を
+                                        # 出力しない指示になっているため、その場合はDocsへの保存自体をスキップする
+                                        if gas_webapp_url and gas_hmac_secret and "【単元】" in review_text:
                                             st.session_state[review_doc_key] = gas_client.append_review_to_docs(
                                                 gas_webapp_url, gas_hmac_secret, student_id, review_text
                                             )
@@ -657,27 +630,6 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
                             st.warning(f"分析ノートへの保存に失敗しました（添削結果は上に表示されています）: {doc_url_or_err}")
 
         st.markdown("---")
-        st.subheader("🧠 NotebookLMで弱点を分析してもらおう")
-        st.write("今回解いた問題と正誤結果をまとめたPDFを作りました。NotebookLMに読み込ませて、自分の弱点を分析してもらいましょう。")
-
-        karute_entries = [
-            (problem_img_paths[i], f"第{i+1}問（難易度: {problems[i].get('difficulty', '普通')}）: {'正解' if r['is_correct'] else '不正解'}")
-            for i, r in enumerate(results)
-            if os.path.exists(problem_img_paths[i])
-        ]
-        if karute_entries:
-            st.download_button(
-                "📥 学習カルテPDFをダウンロード",
-                data=build_labeled_pdf(karute_entries),
-                file_name="gakushu_karute.pdf",
-                mime="application/pdf",
-                key=f"dl_karute_{battle_key}",
-            )
-            st.info("①NotebookLM (notebooklm.google.com) を開く → ②「ソースを追加」でこのPDFをアップロード → ③下の質問をコピーして貼り付けて聞いてみよう")
-            render_copy_prompt_box(
-                gemini_service.generate_notebooklm_analysis_prompt(unit_topic_name, correct_count, len(results)),
-                key=f"notebooklm_{battle_key}",
-            )
 
         if st.button("⚔️ 次のバトルに挑む", type="primary"):
             _reset_battle_session()
