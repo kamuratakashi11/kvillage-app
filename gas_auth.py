@@ -15,7 +15,7 @@ import hmac
 import json
 import time
 
-DEFAULT_TTL_SECONDS = 600
+DEFAULT_TTL_SECONDS = 3600
 
 
 def _b64url_encode(data: bytes) -> str:
