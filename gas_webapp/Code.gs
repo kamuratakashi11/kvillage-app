@@ -57,7 +57,6 @@ var CORRECTION_PROMPT = [
   '※評価は単なる計算の正誤だけでなく、公式の丸暗記に頼っていないか等、数学的な本質的理解度を含めて評価してください。',
   '',
   '---',
-  '【日付】 YYYY-MM-DD（本日の日付）',
   '【単元】',
   '【元の問題文】 （画像から読み取った問題文をテキスト化して記載）',
   '【理解度スコア】 （100点満点）',
@@ -168,12 +167,13 @@ function gradeAnswer(token, base64Image, mimeType) {
 
 /**
  * Geminiの応答（対話・添削の説明文＋末尾の学習記録）から、
- * 【日付】〜【今後の学習方針】の学習記録部分だけを取り出す。
+ * 【単元】〜【今後の学習方針】の学習記録部分だけを取り出す。
  * Docsにはこの部分だけを書き込み、説明文でページが埋まらないようにする。
- * 【日付】が見つからない場合は、想定外の出力形式とみなし全文をそのまま返す（記録の取りこぼしを防ぐため）。
+ * 日付はappendToStudentDoc_側で追記時刻として別途記録するため、ここでは扱わない。
+ * 【単元】が見つからない場合は、想定外の出力形式とみなし全文をそのまま返す（記録の取りこぼしを防ぐため）。
  */
 function extractStudyRecord_(resultText) {
-  var startIdx = resultText.indexOf('【日付】');
+  var startIdx = resultText.indexOf('【単元】');
   if (startIdx === -1) {
     return resultText;
   }
