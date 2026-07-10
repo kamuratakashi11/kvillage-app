@@ -1290,7 +1290,11 @@ def main():
         else:
             token = gas_auth.generate_gas_token(student_id, gas_hmac_secret)
             iframe_src = f"{gas_webapp_url}?token={token}"
-            st.components.v1.iframe(iframe_src, height=900, scrolling=True)
+            st.markdown(
+                f'<iframe src="{iframe_src}" width="100%" height="900" scrolling="yes" '
+                f'style="border:none;" allow="clipboard-write"></iframe>',
+                unsafe_allow_html=True,
+            )
 
     elif page == "📚 NotebookLM連携マニュアル":
         st.title("📚 NotebookLMで自分専用の復習テストを作る方法")
