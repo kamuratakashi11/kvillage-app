@@ -146,6 +146,47 @@ function doGet(e) {
 }
 
 /**
+ * Streamlit側（RPGバトルの「くわしく添削してほしい」機能など）から、
+ * 既にGemini呼び出し済みの添削結果テキストを分析ノートに追記してもらうための窓口。
+ * doGet/gradeAnswerとは異なり、画像やGemini呼び出しは行わず、Docsへの追記だけを行う
+ * （Streamlit側は既に自前でGemini APIキーを持っているため、二重にGASを経由させない）。
+ *
+ * POSTのJSONボディ: { token: string, resultText: string }
+ * 戻り値（JSON）: { docUrl: string } または { error: string }
+ */
+function doPost(e) {
+  var body;
+  try {
+    body = JSON.parse(e.postData.contents);
+  } catch (err) {
+    return _jsonResponse_({ error: 'リクエストの形式（JSON）が不正です' });
+  }
+
+  var secret = getSecret_('HMAC_SECRET');
+  var verified = verifyTokenDetailed_(body.token, secret);
+  if (!verified.sid) {
+    return _jsonResponse_({ error: 'セッションの検証に失敗しました（' + verified.reason + '）' });
+  }
+
+  var resultText = (body.resultText || '').toString();
+  if (!resultText.trim()) {
+    return _jsonResponse_({ error: '追記する内容が空です' });
+  }
+
+  try {
+    var docUrl = appendToStudentDoc_(verified.sid, extractStudyRecord_(resultText));
+    return _jsonResponse_({ docUrl: docUrl });
+  } catch (err) {
+    return _jsonResponse_({ error: 'Docsへの追記に失敗しました: ' + err.message });
+  }
+}
+
+function _jsonResponse_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+      .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
  * クライアント（index.html）から google.script.run 経由で呼ばれる添削処理本体。
  * token はここで再検証する（クライアントの自己申告のstudent_idは信用しない）。
  *
