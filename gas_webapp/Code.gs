@@ -60,13 +60,6 @@ var CORRECTION_PROMPT = [
   '【解答の状況】',
   '【分析された弱点・思考の癖】',
   '【今後の学習方針】',
-  '',
-  '📝 **次のステップ**：',
-  '上のデータをコピーして、自分の分析ノートに貼り付けて今日の記録を残しましょう！',
-  '👉 [📋 Google Docsを開く](https://docs.google.com/document/u/0/)',
-  '',
-  '週末はNotebookLMで復習テストを作ってみてね。',
-  '👉 [🧠 NotebookLMを開く](https://notebooklm.google.com/)',
   '---'
 ].join('\n');
 
@@ -180,8 +173,9 @@ function extractStudyRecord_(resultText) {
   if (startIdx === -1) {
     return resultText;
   }
-  var endIdx = resultText.indexOf('📝', startIdx);
-  var record = endIdx === -1 ? resultText.substring(startIdx) : resultText.substring(startIdx, endIdx);
+  var record = resultText.substring(startIdx);
+  // 末尾の区切り線（---）が含まれていれば取り除く
+  record = record.replace(/-{3,}\s*$/, '');
   return record.trim();
 }
 
