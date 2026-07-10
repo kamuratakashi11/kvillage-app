@@ -2,9 +2,13 @@
  * kvillage - AI自動添削 GASバックエンド
  *
  * 【事前準備】このプロジェクトの「プロジェクトの設定」→「スクリプト プロパティ」に
- * 以下の2つを設定してください:
+ * 以下を設定してください:
  *   GEMINI_API_KEY : Gemini APIキー
  *   HMAC_SECRET    : Streamlit側のsecrets.tomlに設定する GAS_HMAC_SECRET と同じ値
+ *   DOCS_FOLDER_ID : （任意）新規作成する分析ノートを保存するGoogle DriveのフォルダID。
+ *                    未設定の場合はマイドライブ直下に作成される。
+ *                    フォルダのURL（https://drive.google.com/drive/u/0/folders/XXXXXXXX）の
+ *                    末尾のXXXXXXXX部分をコピーして設定する。
  *
  * 【デプロイ設定】「デプロイ」→「新しいデプロイ」→ 種類「ウェブアプリ」
  *   実行するユーザー: 自分（Me）
@@ -53,7 +57,6 @@ var CORRECTION_PROMPT = [
   '※評価は単なる計算の正誤だけでなく、公式の丸暗記に頼っていないか等、数学的な本質的理解度を含めて評価してください。',
   '',
   '---',
-  '【日付】 YYYY-MM-DD（本日の日付）',
   '【単元】',
   '【元の問題文】 （画像から読み取った問題文をテキスト化して記載）',
   '【理解度スコア】 （100点満点）',
@@ -164,12 +167,13 @@ function gradeAnswer(token, base64Image, mimeType) {
 
 /**
  * Geminiの応答（対話・添削の説明文＋末尾の学習記録）から、
- * 【日付】〜【今後の学習方針】の学習記録部分だけを取り出す。
+ * 【単元】〜【今後の学習方針】の学習記録部分だけを取り出す。
  * Docsにはこの部分だけを書き込み、説明文でページが埋まらないようにする。
- * 【日付】が見つからない場合は、想定外の出力形式とみなし全文をそのまま返す（記録の取りこぼしを防ぐため）。
+ * 日付はappendToStudentDoc_側で追記時刻として別途記録するため、ここでは扱わない。
+ * 【単元】が見つからない場合は、想定外の出力形式とみなし全文をそのまま返す（記録の取りこぼしを防ぐため）。
  */
 function extractStudyRecord_(resultText) {
-  var startIdx = resultText.indexOf('【日付】');
+  var startIdx = resultText.indexOf('【単元】');
   if (startIdx === -1) {
     return resultText;
   }
@@ -194,7 +198,11 @@ function callGemini_(base64Image, mimeType) {
         { text: CORRECTION_PROMPT },
         { inline_data: { mime_type: mimeType || 'image/jpeg', data: base64Image } }
       ]
-    }]
+    }],
+    // このタスクでは内部の「思考」ステップは不要なため、その分のトークン課金を避けるためオフにする
+    generationConfig: {
+      thinkingConfig: { thinkingBudget: 0 }
+    }
   };
 
   var response = UrlFetchApp.fetch(url, {
@@ -243,8 +251,15 @@ function appendToStudentDoc_(studentId, resultText) {
     doc = DocumentApp.create('数学 学習記録ノート（' + studentId + '）');
     docId = doc.getId();
     props.setProperty(propKey, docId);
-    DriveApp.getFileById(docId).setSharing(
-        DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var file = DriveApp.getFileById(docId);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    var folderId = getSecret_('DOCS_FOLDER_ID');
+    if (folderId) {
+      var folder = DriveApp.getFolderById(folderId);
+      folder.addFile(file);
+      DriveApp.getRootFolder().removeFile(file);
+    }
   }
 
   var body = doc.getBody();

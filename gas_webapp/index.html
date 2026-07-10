@@ -45,12 +45,13 @@
   <div class="card" id="resultCard" style="display:none;">
     <h3>📋 あなたの分析ノート</h3>
     <p><a id="docLink" href="#" target="_blank"></a></p>
-    <p>これをNotebookLMに一度読み込ませれば、次回以降はNotebookLMの「同期」ボタンを押すだけで最新の内容が反映されます。</p>
+    <p>初めての場合は、上のリンクを開いて「ファイル」→「ショートカットをドライブに追加」で自分のドライブに追加してからNotebookLMに読み込ませてください。一度読み込ませれば、次回以降はNotebookLMの「同期」ボタンを押すだけで最新の内容が反映されます（詳しくはStreamlitの「NotebookLM連携マニュアル」ページをご覧ください）。</p>
 
     <h3>✏️ 添削結果</h3>
     <div id="resultBox"></div>
 
     <p><button id="askMoreBtn" class="secondary">💬 追加で質問する</button></p>
+    <p style="font-size:13px; color:#6B7280;">押すと、この結果がコピーされ、Geminiが新しいタブで開きます。開いたら<strong>Geminiのチャット欄に貼り付け（スマホは入力欄を長押し→貼り付け、パソコンはCtrl+V）</strong>てから送信してください。</p>
     <div id="manualCopyBox" style="display:none;">
       <p>自動コピーができなかったため、下の内容を手動でコピーしてGeminiに貼り付けてください。</p>
       <textarea id="manualCopyText" readonly style="width:100%; height:160px;"></textarea>
@@ -67,6 +68,50 @@
     '引き続き「Kvillage先生」として、です・ます調の温かいトーンで、' +
     'ヒントを出しながら励ましつつ教えてください。';
 
+  var MAX_IMAGE_DIMENSION = 1600;
+  var IMAGE_JPEG_QUALITY = 0.8;
+
+  /**
+   * アップロードされたファイルを送信用のbase64に変換する。
+   * 画像の場合は、Gemini APIのコスト（トークン数は解像度に比例）を抑えるため、
+   * 長辺がMAX_IMAGE_DIMENSIONを超えないようリサイズしてJPEG圧縮する。
+   * PDF等の画像以外はそのまま読み込む。
+   */
+  function prepareFileForUpload_(file) {
+    return new Promise(function (resolve, reject) {
+      if (file.type.indexOf('image/') !== 0) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          resolve({ base64: reader.result.split(',')[1], mimeType: file.type });
+        };
+        reader.onerror = function () {
+          reject(new Error('ファイルの読み込みに失敗しました'));
+        };
+        reader.readAsDataURL(file);
+        return;
+      }
+
+      var img = new Image();
+      var objectUrl = URL.createObjectURL(file);
+      img.onload = function () {
+        URL.revokeObjectURL(objectUrl);
+        var scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(img.width, img.height));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        var dataUrl = canvas.toDataURL('image/jpeg', IMAGE_JPEG_QUALITY);
+        resolve({ base64: dataUrl.split(',')[1], mimeType: 'image/jpeg' });
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error('画像の読み込みに失敗しました'));
+      };
+      img.src = objectUrl;
+    });
+  }
+
   var gradeBtn = document.getElementById('gradeBtn');
   if (gradeBtn) {
     gradeBtn.addEventListener('click', function () {
@@ -80,9 +125,7 @@
       gradeBtn.disabled = true;
       document.getElementById('statusMsg').textContent = '添削中です…（30秒ほどかかることがあります）';
 
-      var reader = new FileReader();
-      reader.onload = function () {
-        var base64 = reader.result.split(',')[1];
+      prepareFileForUpload_(file).then(function (prepared) {
         google.script.run
           .withSuccessHandler(function (res) {
             gradeBtn.disabled = false;
@@ -100,9 +143,11 @@
             gradeBtn.disabled = false;
             document.getElementById('statusMsg').textContent = 'エラー: ' + err.message;
           })
-          .gradeAnswer(TOKEN, base64, file.type);
-      };
-      reader.readAsDataURL(file);
+          .gradeAnswer(TOKEN, prepared.base64, prepared.mimeType);
+      }).catch(function (err) {
+        gradeBtn.disabled = false;
+        document.getElementById('statusMsg').textContent = 'エラー: ' + err.message;
+      });
     });
   }
 
@@ -139,17 +184,17 @@
 
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(combined).then(function () {
-          document.getElementById('statusMsg').textContent = 'コピーしました！Geminiに貼り付けて質問してください。';
+          document.getElementById('statusMsg').textContent = '✅ コピーしました！開いたGeminiのチャット欄に貼り付け（長押しまたはCtrl+V）てから送信してください。';
         }).catch(function () {
           if (copyWithExecCommand_(combined)) {
-            document.getElementById('statusMsg').textContent = 'コピーしました！Geminiに貼り付けて質問してください。';
+            document.getElementById('statusMsg').textContent = '✅ コピーしました！開いたGeminiのチャット欄に貼り付け（長押しまたはCtrl+V）てから送信してください。';
           } else {
             showManualCopyBox_(combined);
             document.getElementById('statusMsg').textContent = '自動コピーができませんでした。下の欄から手動でコピーしてください。';
           }
         });
       } else if (copyWithExecCommand_(combined)) {
-        document.getElementById('statusMsg').textContent = 'コピーしました！Geminiに貼り付けて質問してください。';
+        document.getElementById('statusMsg').textContent = '✅ コピーしました！開いたGeminiのチャット欄に貼り付け（長押しまたはCtrl+V）てから送信してください。';
       } else {
         showManualCopyBox_(combined);
         document.getElementById('statusMsg').textContent = '自動コピーができませんでした。下の欄から手動でコピーしてください。';

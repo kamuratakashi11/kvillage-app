@@ -238,8 +238,9 @@ def record_boss_win(student_id, category_id):
     return student
 
 
-def _battle_ready_pool(category_id, topic):
-    """db.json（既存の問題バンク）から、指定ダンジョン・指定分野で正解が登録済みの問題一覧を返す"""
+def _battle_ready_pool(category_id, topic, university=None):
+    """db.json（既存の問題バンク）から、指定ダンジョン・指定分野で正解が登録済みの問題一覧を返す。
+    universityを指定した場合は、その出題範囲（大学名・模試名）の問題のみに絞る。"""
     db = load_json(DB_PATH, [])
     pool = []
     for item in db:
@@ -248,14 +249,31 @@ def _battle_ready_pool(category_id, topic):
         item_topics = item.get("topic", [])
         if isinstance(item_topics, str):
             item_topics = [item_topics]
-        if topic in item_topics and str(item.get("correct_answer", "")).strip():
-            pool.append(item)
+        if topic not in item_topics or not str(item.get("correct_answer", "")).strip():
+            continue
+        if university and item.get("university") != university:
+            continue
+        pool.append(item)
     return pool
 
 
-def count_available_battle_problems(category_id, topic):
+def count_available_battle_problems(category_id, topic, university=None):
     """指定ダンジョン・指定分野でバトルに出題可能な（正解登録済みの）問題数を返す"""
-    return len(_battle_ready_pool(category_id, topic))
+    return len(_battle_ready_pool(category_id, topic, university=university))
+
+
+def get_available_universities(category_id, topic):
+    """指定ダンジョン・指定分野で出題可能な問題を、出題範囲（大学名・模試名）ごとに集計する。
+    生徒が難易度の目安として出題範囲を選べるようにするための一覧。
+    戻り値: [(university_name, 問題数), ...]（問題数の多い順）。未設定の問題は集計に含めない。"""
+    pool = _battle_ready_pool(category_id, topic)
+    counts = {}
+    for item in pool:
+        name = (item.get("university") or "").strip()
+        if not name:
+            continue
+        counts[name] = counts.get(name, 0) + 1
+    return sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
 
 
 def _to_battle_problem(item):
@@ -269,9 +287,10 @@ def _to_battle_problem(item):
     }
 
 
-def pick_battle_problems(category_id, topic, count):
-    """指定ダンジョン・指定分野で正解が登録済みの問題を、重複無しで最大count問ランダムに選ぶ"""
-    pool = _battle_ready_pool(category_id, topic)
+def pick_battle_problems(category_id, topic, count, university=None):
+    """指定ダンジョン・指定分野で正解が登録済みの問題を、重複無しで最大count問ランダムに選ぶ。
+    universityを指定した場合は、その出題範囲（大学名・模試名）の問題のみから選ぶ。"""
+    pool = _battle_ready_pool(category_id, topic, university=university)
     if not pool:
         return []
     count = min(count, len(pool))
