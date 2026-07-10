@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    body {
+      font-family: -apple-system, 'Hiragino Kaku Gothic ProN', Meiryo, sans-serif;
+      margin: 0; padding: 16px; background: #F8F9FA; color: #1F2937;
+    }
+    .card { background: #fff; border: 1px solid #E5E7EB; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    button {
+      background: #4F46E5; color: #fff; border: none; border-radius: 10px;
+      padding: 12px 20px; font-size: 15px; font-weight: bold; cursor: pointer;
+    }
+    button:disabled { background: #9CA3AF; cursor: not-allowed; }
+    button.secondary { background: #fff; color: #4F46E5; border: 1px solid #4F46E5; }
+    #resultBox { white-space: pre-wrap; line-height: 1.7; }
+    .error { color: #B91C1C; background: #FEE2E2; border-radius: 8px; padding: 12px; }
+    a { color: #4F46E5; }
+  </style>
+</head>
+<body>
+<? if (!valid) { ?>
+  <div class="error">
+    セッションが無効です。Streamlitの画面を一度再読み込みしてください。
+  </div>
+<? } else { ?>
+  <div class="card" id="uploadCard">
+    <h3>📷 解答の写真をアップロード</h3>
+    <input type="file" id="fileInput" accept="image/*">
+    <p><button id="gradeBtn">✏️ 添削してもらう</button></p>
+    <p id="statusMsg"></p>
+  </div>
+
+  <div class="card" id="resultCard" style="display:none;">
+    <h3>📋 あなたの分析ノート</h3>
+    <p><a id="docLink" href="#" target="_blank"></a></p>
+    <p>これをNotebookLMに一度読み込ませれば、次回以降はNotebookLMの「同期」ボタンを押すだけで最新の内容が反映されます。</p>
+
+    <h3>✏️ 添削結果</h3>
+    <div id="resultBox"></div>
+
+    <p><button id="askMoreBtn" class="secondary">💬 追加で質問する</button></p>
+  </div>
+<? } ?>
+
+<script>
+  var TOKEN = <?= JSON.stringify(token) ?>;
+  var lastResultText = '';
+
+  var QUESTION_TEMPLATE =
+    'この添削結果について、追加で質問があります。' +
+    '引き続き「Kvillage先生」として、です・ます調の温かいトーンで、' +
+    'ヒントを出しながら励ましつつ教えてください。';
+
+  var gradeBtn = document.getElementById('gradeBtn');
+  if (gradeBtn) {
+    gradeBtn.addEventListener('click', function () {
+      var fileInput = document.getElementById('fileInput');
+      var file = fileInput.files[0];
+      if (!file) {
+        document.getElementById('statusMsg').textContent = '写真を選択してください。';
+        return;
+      }
+
+      gradeBtn.disabled = true;
+      document.getElementById('statusMsg').textContent = '添削中です…（30秒ほどかかることがあります）';
+
+      var reader = new FileReader();
+      reader.onload = function () {
+        var base64 = reader.result.split(',')[1];
+        google.script.run
+          .withSuccessHandler(function (res) {
+            gradeBtn.disabled = false;
+            document.getElementById('statusMsg').textContent = '';
+            lastResultText = res.resultText;
+            document.getElementById('resultBox').textContent = res.resultText;
+            document.getElementById('docLink').textContent = res.docUrl;
+            document.getElementById('docLink').href = res.docUrl;
+            document.getElementById('resultCard').style.display = 'block';
+          })
+          .withFailureHandler(function (err) {
+            gradeBtn.disabled = false;
+            document.getElementById('statusMsg').textContent = 'エラー: ' + err.message;
+          })
+          .gradeAnswer(TOKEN, base64, file.type);
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  var askMoreBtn = document.getElementById('askMoreBtn');
+  if (askMoreBtn) {
+    askMoreBtn.addEventListener('click', function () {
+      var combined = lastResultText + '\n\n' + QUESTION_TEMPLATE;
+      navigator.clipboard.writeText(combined).then(function () {
+        document.getElementById('statusMsg').textContent = 'コピーしました！Geminiに貼り付けて質問してください。';
+      });
+      window.open('https://gemini.google.com/app', '_blank');
+    });
+  }
+</script>
+</body>
+</html>
