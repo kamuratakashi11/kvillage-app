@@ -20,6 +20,7 @@ import rpg_ui
 import pdf_ingestion
 import theme
 import gas_auth
+import session_store
 
 # 共通設定 (Kvillage先生仕様)
 st.set_page_config(
@@ -198,23 +199,26 @@ def check_password_and_login():
     users = load_json(USERS_PATH, {})
     
     # URLパラメータからの自動復元
+    # （URLにはパスワードそのものではなく、session_storeが発行したランダムな
+    #   不透明トークンだけが入る。トークン自体からパスワードは分からない）
     query_params = st.query_params
-    if "token" in query_params:
-        token = query_params["token"]
-        if MASTER_PASSWORD and token == MASTER_PASSWORD:
-            if not st.session_state.get("logged_in"):
+    if "token" in query_params and not st.session_state.get("logged_in"):
+        resolved = session_store.resolve_session(query_params["token"])
+        if resolved:
+            sid, is_master_session = resolved
+            if is_master_session and MASTER_PASSWORD:
                 st.session_state["logged_in"] = True
                 st.session_state["student_id"] = "master"
                 st.session_state["student_name"] = "Kvillage先生"
                 st.session_state["is_guest"] = False
                 st.session_state["is_master"] = True
-        elif token in users and not st.session_state.get("logged_in"):
-            st.session_state["logged_in"] = True
-            st.session_state["student_id"] = token
-            st.session_state["student_name"] = users[token]
-            st.session_state["is_guest"] = False
-            st.session_state["is_master"] = False
-            process_daily_login(token)
+            elif not is_master_session and sid in users:
+                st.session_state["logged_in"] = True
+                st.session_state["student_id"] = sid
+                st.session_state["student_name"] = users[sid]
+                st.session_state["is_guest"] = False
+                st.session_state["is_master"] = False
+                process_daily_login(sid)
             
     if "logged_in" not in st.session_state:
         st.session_state["logged_in"] = False
@@ -235,7 +239,7 @@ def check_password_and_login():
                     st.session_state["student_name"] = "Kvillage先生"
                     st.session_state["is_guest"] = False
                     st.session_state["is_master"] = True
-                    st.query_params.token = MASTER_PASSWORD
+                    st.query_params.token = session_store.create_session("master", is_master=True)
                     st.rerun()
                 elif login_pass in users:
                     st.session_state["logged_in"] = True
@@ -243,7 +247,7 @@ def check_password_and_login():
                     st.session_state["student_name"] = users[login_pass]
                     st.session_state["is_guest"] = False
                     st.session_state["is_master"] = False
-                    st.query_params.token = login_pass
+                    st.query_params.token = session_store.create_session(login_pass, is_master=False)
                     process_daily_login(login_pass)
                     st.rerun()
                 else:
@@ -286,7 +290,7 @@ def check_password_and_login():
                         st.session_state["student_name"] = new_name
                         st.session_state["is_guest"] = False
                         st.session_state["is_master"] = False
-                        st.query_params.token = new_pass
+                        st.query_params.token = session_store.create_session(new_pass, is_master=False)
                         process_daily_login(new_pass)
                         st.rerun()
                 
@@ -438,6 +442,7 @@ def main():
 
     # ログアウトボタン
     if st.sidebar.button("ログアウト"):
+        session_store.delete_session(st.query_params.get("token"))
         st.session_state.clear()
         st.query_params.clear()
         st.rerun()

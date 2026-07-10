@@ -13,6 +13,7 @@ HISTORY_PATH = os.path.join(BASE_DIR, "history.json")
 STUDENTS_DATA_PATH = os.path.join(BASE_DIR, "students_data.json")
 ANSWER_CACHE_PATH = os.path.join(BASE_DIR, "answer_cache.json")
 BATTLE_STATE_PATH = os.path.join(BASE_DIR, "battle_state.json")
+SESSIONS_PATH = os.path.join(BASE_DIR, "sessions.json")
 BG_IMG_PATH = os.path.join(BASE_DIR, "bg.png")
 
 
