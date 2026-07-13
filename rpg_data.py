@@ -99,6 +99,12 @@ def get_unit(category_id, unit_id):
     return None
 
 
+def get_category_topics(category_id):
+    """指定ダンジョンに含まれる全分野のtopic一覧を返す（ボス戦で全分野から出題するために使う）"""
+    cat = CATEGORY_MAP[category_id]
+    return [unit["topic"] for unit in cat["units"]]
+
+
 def _default_dungeon_progress(category_id):
     cat = CATEGORY_MAP[category_id]
     return {
@@ -240,7 +246,9 @@ def record_boss_win(student_id, category_id):
 
 def _battle_ready_pool(category_id, topic, universities=None):
     """db.json（既存の問題バンク）から、指定ダンジョン・指定分野で正解が登録済みの問題一覧を返す。
+    topicは単一分野名の文字列、またはボス戦のように複数分野から出題したい場合はリスト/集合で渡せる。
     universitiesを指定した場合は、その出題範囲（大学名・模試名）のいずれかに該当する問題のみに絞る。"""
+    allowed_topics = {topic} if isinstance(topic, str) else set(topic)
     db = load_json(DB_PATH, [])
     pool = []
     for item in db:
@@ -249,7 +257,7 @@ def _battle_ready_pool(category_id, topic, universities=None):
         item_topics = item.get("topic", [])
         if isinstance(item_topics, str):
             item_topics = [item_topics]
-        if topic not in item_topics or not str(item.get("correct_answer", "")).strip():
+        if not allowed_topics.intersection(item_topics) or not str(item.get("correct_answer", "")).strip():
             continue
         if universities and item.get("university") not in universities:
             continue
@@ -278,12 +286,18 @@ def get_available_universities(category_id, topic):
 
 def _to_battle_problem(item):
     difficulty = item.get("difficulty", "普通")
+    item_topics = item.get("topic", [])
+    if isinstance(item_topics, str):
+        item_topics = [item_topics]
     return {
         "image_file": item["image_file"],
         "correct_answer": item["correct_answer"],
         "answer_type": item.get("answer_type", "value"),
         "difficulty": difficulty,
         "exp_value": DIFFICULTY_EXP.get(difficulty, 25),
+        # ボス戦は複数分野から出題されるため、添削レビュー表示にはボスの旗印topicではなく
+        # その問題が実際に属する分野名を使う
+        "topic": item_topics[0] if item_topics else None,
     }
 
 
