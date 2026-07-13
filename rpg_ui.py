@@ -448,6 +448,11 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
                 rpg_data.record_unit_win(student_id, category_id, unit_id)
                 st.session_state[win_flag] = True
 
+    if not battle_won and not battle_lost:
+        if st.button("🏳️ この挑戦をあきらめて選び直す", key=f"give_up_{battle_key}"):
+            _reset_battle_session()
+            st.rerun()
+
     st.markdown("---")
 
     if problems_key not in st.session_state and not battle_won and not battle_lost:
