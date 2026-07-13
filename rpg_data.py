@@ -76,11 +76,12 @@ CATEGORY_MAP = {cat["id"]: cat for cat in CATEGORIES}
 DEFAULT_CATEGORY = "入試"  # カテゴリ未設定の既存問題データは「入試」として扱う
 
 ENEMY_MAX_HP = 100
-DAMAGE_PER_CORRECT_MULTIPLIER = 2
+# 1問正解ごとのダメージ（難易度に関わらず固定）。約3問正解で撃破できるよう設定。
+DAMAGE_PER_CORRECT = 34
 PLAYER_MAX_HP = 100
 DAMAGE_ON_WRONG = 20
 
-BOSS_ENEMY_MAX_HP = 250
+BOSS_ENEMY_MAX_HP = 100
 
 DIFFICULTY_EXP = {"易しい": 15, "普通": 25, "難しい": 40}
 
@@ -177,6 +178,11 @@ def get_earned_titles(student):
     return [dp["title"] for dp in dungeon_progress.values() if dp.get("title")]
 
 
+def is_unit_cleared(entry):
+    """撃破済み、またはスキップ済みなら「クリア扱い」とする（次の単元の解放条件に使う）"""
+    return entry.get("defeated", 0) > 0 or entry.get("skipped", False)
+
+
 def is_unit_unlocked(category_id, unit, field_progress):
     if unit["order"] == 1:
         return True
@@ -185,29 +191,32 @@ def is_unit_unlocked(category_id, unit, field_progress):
     if not prev_units:
         return True
     prev_unit = prev_units[0]
-    return field_progress.get(prev_unit["id"], {}).get("defeated", 0) > 0
+    return is_unit_cleared(field_progress.get(prev_unit["id"], {}))
 
 
 def is_boss_unlocked(category_id, field_progress):
     cat = CATEGORY_MAP[category_id]
-    return all(field_progress.get(unit["id"], {}).get("defeated", 0) > 0 for unit in cat["units"])
+    return all(is_unit_cleared(field_progress.get(unit["id"], {})) for unit in cat["units"])
 
 
 def compute_unit_states(category_id, field_progress):
-    """すごろく型マップ表示用に、各単元の状態（cleared/current/available/locked）を判定する。
-    クリア済み以外の単元のうち、order最小の2つ（現在挑戦中・次に挑戦できる）だけを開放し、
+    """すごろく型マップ表示用に、各単元の状態（cleared/skipped/current/available/locked）を判定する。
+    クリア済み・スキップ済み以外の単元のうち、order最小の2つ（現在挑戦中・次に挑戦できる）だけを開放し、
     残りはロックする。"""
     cat = CATEGORY_MAP[category_id]
     units_by_order = sorted(cat["units"], key=lambda u: u["order"])
 
     uncleared = [
         u for u in units_by_order
-        if field_progress.get(u["id"], {}).get("defeated", 0) == 0
+        if not is_unit_cleared(field_progress.get(u["id"], {}))
     ]
 
     states = {}
     for u in units_by_order:
-        if field_progress.get(u["id"], {}).get("defeated", 0) > 0:
+        entry = field_progress.get(u["id"], {})
+        if entry.get("skipped", False):
+            states[u["id"]] = "skipped"
+        elif entry.get("defeated", 0) > 0:
             states[u["id"]] = "cleared"
         else:
             states[u["id"]] = "locked"
@@ -227,6 +236,18 @@ def record_unit_win(student_id, category_id, unit_id):
     dp = student["dungeon_progress"][category_id]
     dp["field_progress"].setdefault(unit_id, {"defeated": 0})
     dp["field_progress"][unit_id]["defeated"] += 1
+    data[student_id] = student
+    save_json(STUDENTS_DATA_PATH, data)
+    return student
+
+
+def record_unit_skip(student_id, category_id, unit_id):
+    """演習をせず、この分野をクリア扱いにして次の分野に進む（苦手分野で詰まったとき・数学Ⅲ不要な生徒向け）"""
+    data = load_json(STUDENTS_DATA_PATH, {})
+    student = data.get(student_id, {})
+    student, _ = ensure_rpg_fields(student)
+    dp = student["dungeon_progress"][category_id]
+    dp["field_progress"][unit_id] = {"defeated": 0, "skipped": True}
     data[student_id] = student
     save_json(STUDENTS_DATA_PATH, data)
     return student

@@ -62,9 +62,9 @@ def _render_dungeon_selector(student_id):
     cols = st.columns(len(rpg_data.CATEGORIES))
     for idx, (col, cat) in enumerate(zip(cols, rpg_data.CATEGORIES)):
         dp = student["dungeon_progress"][cat["id"]]
-        defeated_units = sum(1 for v in dp["field_progress"].values() if v.get("defeated", 0) > 0)
+        cleared_units = sum(1 for v in dp["field_progress"].values() if rpg_data.is_unit_cleared(v))
         total_units = len(cat["units"])
-        badge_text = f"{defeated_units}/{total_units} 分野撃破"
+        badge_text = f"{cleared_units}/{total_units} 分野クリア"
         if dp["boss_defeated"]:
             badge_text = "🏆 制覇済み"
 
@@ -103,6 +103,8 @@ def _sugoroku_node_style(state, is_boss):
     if state == "cleared":
         return {"bg": c["success_bg"], "border": c["success"], "text": c["success_text"],
                 "label": "撃破済み" if is_boss else "クリア"}
+    if state == "skipped":
+        return {"bg": c["locked_bg"], "border": c["text_muted"], "text": c["text_secondary"], "label": "スキップ済み"}
     if state == "current":
         return {"bg": c["amber_bg"], "border": c["amber"], "text": c["amber_text"], "label": "挑戦中"}
     return {"bg": c["accent_bg"], "border": c["accent"], "text": c["accent_text"], "label": "挑戦できます"}
@@ -182,7 +184,7 @@ def _render_sugoroku_map(category_id, cat, field_progress, boss_unlocked, boss_d
                     style = _sugoroku_node_style(state, node["is_boss"])
                     st.markdown(f'<div class="sg-mk sg-mk-{marker_index}"></div>', unsafe_allow_html=True)
                     button_css_rules.append(_sugoroku_button_css(marker_index, style, state == "current"))
-                    label = "👑" if node["is_boss"] else str(node["order"])
+                    label = "👑" if node["is_boss"] else ("⏭️" if state == "skipped" else str(node["order"]))
                     if st.button(label, key=f"sgbtn_{category_id}_{node['id']}"):
                         clicked_unit_id = node["id"]
                     status_text, status_color = style["label"], style["text"]
@@ -289,6 +291,20 @@ def _render_battle_setup(category_id, unit_id, student_id):
         st.rerun()
 
     st.title(f"{cat['icon']} {cat['name']} － ⚔️ {enemy_label} に挑む")
+
+    if not is_boss:
+        student = rpg_data.load_student_with_rpg_fields(student_id)
+        entry = student["dungeon_progress"][category_id]["field_progress"].get(unit_id, {})
+        if entry.get("defeated", 0) == 0 and not entry.get("skipped", False):
+            with st.expander("⏭️ この分野を解かずにスキップする"):
+                st.caption("苦手な分野で一旦先に進みたい時や、数学Ⅲなど自分には不要な分野を飛ばして次に進めます。スキップした分野はEXP・チケットは得られませんが、あとからいつでも挑戦し直せます。")
+                if st.checkbox("スキップすることを理解しました", key=f"skip_confirm_chk_{battle_key}"):
+                    if st.button("⏭️ この分野をスキップして次へ進む", key=f"skip_confirm_btn_{battle_key}"):
+                        rpg_data.record_unit_skip(student_id, category_id, unit_id)
+                        _pop_battle_setup_keys(battle_key)
+                        if "field" in st.query_params:
+                            del st.query_params["field"]
+                        st.rerun()
 
     total_available = rpg_data.count_available_battle_problems(category_id, unit_topic_name)
     if total_available == 0:
@@ -517,7 +533,7 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
                             st.session_state[answer_images_key] = answer_images
 
                             total_damage = sum(
-                                p["exp_value"] * rpg_data.DAMAGE_PER_CORRECT_MULTIPLIER
+                                rpg_data.DAMAGE_PER_CORRECT
                                 for p, r in zip(problems, results) if r["is_correct"]
                             )
                             total_exp = sum(p["exp_value"] for p, r in zip(problems, results) if r["is_correct"])
