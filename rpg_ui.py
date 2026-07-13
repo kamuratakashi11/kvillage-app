@@ -62,9 +62,9 @@ def _render_dungeon_selector(student_id):
     cols = st.columns(len(rpg_data.CATEGORIES))
     for idx, (col, cat) in enumerate(zip(cols, rpg_data.CATEGORIES)):
         dp = student["dungeon_progress"][cat["id"]]
-        defeated_units = sum(1 for v in dp["field_progress"].values() if v.get("defeated", 0) > 0)
+        cleared_units = sum(1 for v in dp["field_progress"].values() if rpg_data.is_unit_cleared(v))
         total_units = len(cat["units"])
-        badge_text = f"{defeated_units}/{total_units} 分野撃破"
+        badge_text = f"{cleared_units}/{total_units} 分野クリア"
         if dp["boss_defeated"]:
             badge_text = "🏆 制覇済み"
 
@@ -103,6 +103,8 @@ def _sugoroku_node_style(state, is_boss):
     if state == "cleared":
         return {"bg": c["success_bg"], "border": c["success"], "text": c["success_text"],
                 "label": "撃破済み" if is_boss else "クリア"}
+    if state == "skipped":
+        return {"bg": c["locked_bg"], "border": c["text_muted"], "text": c["text_secondary"], "label": "スキップ済み"}
     if state == "current":
         return {"bg": c["amber_bg"], "border": c["amber"], "text": c["amber_text"], "label": "挑戦中"}
     return {"bg": c["accent_bg"], "border": c["accent"], "text": c["accent_text"], "label": "挑戦できます"}
@@ -182,7 +184,7 @@ def _render_sugoroku_map(category_id, cat, field_progress, boss_unlocked, boss_d
                     style = _sugoroku_node_style(state, node["is_boss"])
                     st.markdown(f'<div class="sg-mk sg-mk-{marker_index}"></div>', unsafe_allow_html=True)
                     button_css_rules.append(_sugoroku_button_css(marker_index, style, state == "current"))
-                    label = "👑" if node["is_boss"] else str(node["order"])
+                    label = "👑" if node["is_boss"] else ("⏭️" if state == "skipped" else str(node["order"]))
                     if st.button(label, key=f"sgbtn_{category_id}_{node['id']}"):
                         clicked_unit_id = node["id"]
                     status_text, status_color = style["label"], style["text"]
@@ -278,7 +280,8 @@ def _render_battle_setup(category_id, unit_id, student_id):
         return
 
     battle_key = f"{category_id}_{unit_id}"
-    unit_topic_name = unit["name"]
+    is_boss = (unit_id == "boss")
+    unit_topic_name = rpg_data.get_category_topics(category_id) if is_boss else unit["name"]
     enemy_label = unit.get("enemy_name", unit["name"])
 
     if st.button("🗺️ マップに戻る", key=f"setup_back_{battle_key}"):
@@ -288,6 +291,20 @@ def _render_battle_setup(category_id, unit_id, student_id):
         st.rerun()
 
     st.title(f"{cat['icon']} {cat['name']} － ⚔️ {enemy_label} に挑む")
+
+    if not is_boss:
+        student = rpg_data.load_student_with_rpg_fields(student_id)
+        entry = student["dungeon_progress"][category_id]["field_progress"].get(unit_id, {})
+        if entry.get("defeated", 0) == 0 and not entry.get("skipped", False):
+            with st.expander("⏭️ この分野を解かずにスキップする"):
+                st.caption("苦手な分野で一旦先に進みたい時や、数学Ⅲなど自分には不要な分野を飛ばして次に進めます。スキップした分野はEXP・チケットは得られませんが、あとからいつでも挑戦し直せます。")
+                if st.checkbox("スキップすることを理解しました", key=f"skip_confirm_chk_{battle_key}"):
+                    if st.button("⏭️ この分野をスキップして次へ進む", key=f"skip_confirm_btn_{battle_key}"):
+                        rpg_data.record_unit_skip(student_id, category_id, unit_id)
+                        _pop_battle_setup_keys(battle_key)
+                        if "field" in st.query_params:
+                            del st.query_params["field"]
+                        st.rerun()
 
     total_available = rpg_data.count_available_battle_problems(category_id, unit_topic_name)
     if total_available == 0:
@@ -348,7 +365,7 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
         return
 
     is_boss = (unit_id == "boss")
-    unit_topic_name = unit["name"]
+    unit_topic_name = rpg_data.get_category_topics(category_id) if is_boss else unit["name"]
     enemy_label = unit.get("enemy_name", unit["name"])
 
     battle_key = f"{category_id}_{unit_id}"
@@ -415,39 +432,25 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
         _pop_battle_setup_keys(battle_key)
         rpg_data.clear_battle_state(student_id, battle_key)
 
-    if enemy_hp <= 0:
-        st.success(f"🎉 {enemy_label} を倒しました！")
+    battle_won = enemy_hp <= 0
+    battle_lost = (not battle_won) and player_hp <= 0
+
+    if battle_won:
         if is_boss:
             reward_flag = f"boss_reward_given_{student_id}_{battle_key}"
             if not st.session_state.get(reward_flag, False):
                 rpg_data.record_boss_win(student_id, category_id)
                 st.session_state[reward_flag] = True
                 st.balloons()
-            st.success(f"🏆 称号「{cat['final_boss']['title_reward']}」を獲得しました！")
         else:
             win_flag = f"win_recorded_{battle_key}"
             if not st.session_state.get(win_flag, False):
                 rpg_data.record_unit_win(student_id, category_id, unit_id)
                 st.session_state[win_flag] = True
-        if st.button("🗺️ マップに戻ってさらに冒険する", type="primary"):
-            _reset_battle_session()
-            if "field" in st.query_params:
-                del st.query_params["field"]
-            st.rerun()
-        return
-
-    if player_hp <= 0:
-        st.error("💥 やられてしまった...最初からやり直して挑み直そう！")
-        if st.button("🔄 最初からやり直す"):
-            _reset_battle_session()
-            st.session_state[player_hp_key] = rpg_data.PLAYER_MAX_HP
-            st.session_state[hp_key] = enemy_max_hp
-            st.rerun()
-        return
 
     st.markdown("---")
 
-    if problems_key not in st.session_state:
+    if problems_key not in st.session_state and not battle_won and not battle_lost:
         selected_universities = st.session_state.get(f"battle_universities_{battle_key}") or None
         available = rpg_data.count_available_battle_problems(category_id, unit_topic_name, universities=selected_universities)
         if available == 0:
@@ -459,90 +462,91 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
         st.session_state.pop(results_key, None)
         _persist_battle_state()
 
-    problems = st.session_state[problems_key]
+    problems = st.session_state.get(problems_key, [])
     n = len(problems)
     problem_img_paths = [os.path.join(IMG_DIR, p["image_file"]) for p in problems]
 
-    st.subheader(f"📜 出題（全{n}問）")
-    for i, (problem, img_path) in enumerate(zip(problems, problem_img_paths)):
-        st.markdown(f"**第{i+1}問**（難易度: {problem.get('difficulty', '普通')} / 正解でEXP {problem['exp_value']}）")
-        if os.path.exists(img_path):
-            problem_img = Image.open(img_path)
-            buffered = io.BytesIO()
-            problem_img.save(buffered, format="PNG")
-            img_str = base64.b64encode(buffered.getvalue()).decode()
-            st.markdown(f'<img src="data:image/png;base64,{img_str}" style="width:100%; max-width:600px; border-radius:8px; border:1px solid rgba(255,255,255,0.2);">', unsafe_allow_html=True)
-        else:
-            st.error(f"第{i+1}問の画像が見つかりませんでした。")
-
-    existing_paths = [p for p in problem_img_paths if os.path.exists(p)]
-    if existing_paths:
-        st.download_button(
-            f"📥 全{n}問をまとめてPDFでダウンロード（GoodNotes等に貼り付け可）",
-            data=image_files_to_pdf_bytes(existing_paths),
-            file_name="battle_mondai.pdf",
-            mime="application/pdf",
-            key=f"dl_batch_pdf_{battle_key}",
-        )
-    st.caption("💡 印刷不要！ダウンロード後、共有メニューから「GoodNotesにコピー」を選べば、そのままApple Pencilで全問書き込めます。書き終わったら、ページ順そのままでPDFまたは画像でエクスポートして、下のアップロード欄に送信してください。")
-
-    st.subheader("✍️ 手書きで解いて、写真かPDFをアップロード")
-    uploaded_files = st.file_uploader(
-        "解答のPDF（複数ページ可）または画像を、問題の順番通りにアップロードしてください",
-        type=["png", "jpg", "jpeg", "pdf"],
-        accept_multiple_files=True,
-        key=f"battle_upload_{battle_key}",
-    )
-
-    if uploaded_files and results_key not in st.session_state:
-        answer_images = []
-        for uf in uploaded_files:
-            if uf.name.lower().endswith(".pdf"):
-                answer_images.extend(convert_pdf_to_image(uf))
+    if not battle_won and not battle_lost:
+        st.subheader(f"📜 出題（全{n}問）")
+        for i, (problem, img_path) in enumerate(zip(problems, problem_img_paths)):
+            st.markdown(f"**第{i+1}問**（難易度: {problem.get('difficulty', '普通')} / 正解でEXP {problem['exp_value']}）")
+            if os.path.exists(img_path):
+                problem_img = Image.open(img_path)
+                buffered = io.BytesIO()
+                problem_img.save(buffered, format="PNG")
+                img_str = base64.b64encode(buffered.getvalue()).decode()
+                st.markdown(f'<img src="data:image/png;base64,{img_str}" style="width:100%; max-width:600px; border-radius:8px; border:1px solid rgba(255,255,255,0.2);">', unsafe_allow_html=True)
             else:
-                answer_images.append(Image.open(uf))
+                st.error(f"第{i+1}問の画像が見つかりませんでした。")
 
-        if not answer_images:
-            st.error("画像の読み込みに失敗しました。")
-        else:
-            if len(answer_images) < n:
-                st.warning(f"アップロードされたページ数（{len(answer_images)}）が問題数（{n}）より少ないため、{len(answer_images)}問しか採点できません。")
-            elif len(answer_images) > n:
-                st.info(f"アップロードされたページ数（{len(answer_images)}）が問題数（{n}）より多いため、最初の{n}ページのみ採点に使います。")
+        existing_paths = [p for p in problem_img_paths if os.path.exists(p)]
+        if existing_paths:
+            st.download_button(
+                f"📥 全{n}問をまとめてPDFでダウンロード（GoodNotes等に貼り付け可）",
+                data=image_files_to_pdf_bytes(existing_paths),
+                file_name="battle_mondai.pdf",
+                mime="application/pdf",
+                key=f"dl_batch_pdf_{battle_key}",
+            )
+        st.caption("💡 印刷不要！ダウンロード後、共有メニューから「GoodNotesにコピー」を選べば、そのままApple Pencilで全問書き込めます。書き終わったら、ページ順そのままでPDFまたは画像でエクスポートして、下のアップロード欄に送信してください。")
 
-            grade_count = min(n, len(answer_images))
-            if st.button(f"🎯 まとめて採点する（チケット{grade_count}枚消費）", type="primary"):
-                if not api_key:
-                    st.error("システムエラー: 裏側のAI設定（APIキー）が完了していません。Kvillage先生に報告してください。")
-                elif not consume_tickets(student_id, grade_count):
-                    st.error("⚠️ チケットが足りません！明日ログインしてボーナスチケットを受け取ってください。")
+        st.subheader("✍️ 手書きで解いて、写真かPDFをアップロード")
+        uploaded_files = st.file_uploader(
+            "解答のPDF（複数ページ可）または画像を、問題の順番通りにアップロードしてください",
+            type=["png", "jpg", "jpeg", "pdf"],
+            accept_multiple_files=True,
+            key=f"battle_upload_{battle_key}",
+        )
+
+        if uploaded_files and results_key not in st.session_state:
+            answer_images = []
+            for uf in uploaded_files:
+                if uf.name.lower().endswith(".pdf"):
+                    answer_images.extend(convert_pdf_to_image(uf))
                 else:
-                    pairs = list(zip(problems, answer_images))
-                    try:
-                        results = []
-                        with st.spinner(f"敵が{len(pairs)}問の解答を確認中..."):
-                            for problem, image in pairs:
-                                results.append(gemini_service.judge_battle_answer(image, problem["correct_answer"], api_key, problem.get("answer_type", "value")))
-                        st.session_state[results_key] = results
-                        # 「くわしく添削してほしい」ボタン用に、解答画像をこのブラウザセッション内で保持しておく
-                        # （ページを閉じて開き直した場合は失われるため、その場合は再アップロードを求める）
-                        st.session_state[answer_images_key] = answer_images
+                    answer_images.append(Image.open(uf))
 
-                        total_damage = sum(
-                            p["exp_value"] * rpg_data.DAMAGE_PER_CORRECT_MULTIPLIER
-                            for p, r in zip(problems, results) if r["is_correct"]
-                        )
-                        total_exp = sum(p["exp_value"] for p, r in zip(problems, results) if r["is_correct"])
-                        total_player_damage = sum(rpg_data.DAMAGE_ON_WRONG for r in results if not r["is_correct"])
+            if not answer_images:
+                st.error("画像の読み込みに失敗しました。")
+            else:
+                if len(answer_images) < n:
+                    st.warning(f"アップロードされたページ数（{len(answer_images)}）が問題数（{n}）より少ないため、{len(answer_images)}問しか採点できません。")
+                elif len(answer_images) > n:
+                    st.info(f"アップロードされたページ数（{len(answer_images)}）が問題数（{n}）より多いため、最初の{n}ページのみ採点に使います。")
 
-                        st.session_state[hp_key] = max(0, enemy_hp - total_damage)
-                        st.session_state[player_hp_key] = max(0, player_hp - total_player_damage)
-                        if total_exp > 0:
-                            update_student_exp(student_id, total_exp)
-                        _persist_battle_state()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(gemini_service.describe_gemini_error(e))
+                grade_count = min(n, len(answer_images))
+                if st.button(f"🎯 まとめて採点する（チケット{grade_count}枚消費）", type="primary"):
+                    if not api_key:
+                        st.error("システムエラー: 裏側のAI設定（APIキー）が完了していません。Kvillage先生に報告してください。")
+                    elif not consume_tickets(student_id, grade_count):
+                        st.error("⚠️ チケットが足りません！明日ログインしてボーナスチケットを受け取ってください。")
+                    else:
+                        pairs = list(zip(problems, answer_images))
+                        try:
+                            results = []
+                            with st.spinner(f"敵が{len(pairs)}問の解答を確認中..."):
+                                for problem, image in pairs:
+                                    results.append(gemini_service.judge_battle_answer(image, problem["correct_answer"], api_key, problem.get("answer_type", "value")))
+                            st.session_state[results_key] = results
+                            # 「くわしく添削してほしい」ボタン用に、解答画像をこのブラウザセッション内で保持しておく
+                            # （ページを閉じて開き直した場合は失われるため、その場合は再アップロードを求める）
+                            st.session_state[answer_images_key] = answer_images
+
+                            total_damage = sum(
+                                rpg_data.DAMAGE_PER_CORRECT
+                                for p, r in zip(problems, results) if r["is_correct"]
+                            )
+                            total_exp = sum(p["exp_value"] for p, r in zip(problems, results) if r["is_correct"])
+                            total_player_damage = sum(rpg_data.DAMAGE_ON_WRONG for r in results if not r["is_correct"])
+
+                            st.session_state[hp_key] = max(0, enemy_hp - total_damage)
+                            st.session_state[player_hp_key] = max(0, player_hp - total_player_damage)
+                            if total_exp > 0:
+                                update_student_exp(student_id, total_exp)
+                            _persist_battle_state()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(gemini_service.describe_gemini_error(e))
 
     if results_key in st.session_state:
         results = st.session_state[results_key]
@@ -598,7 +602,7 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
                                 with st.spinner("Kvillage先生が添削中です…（30秒ほどかかることがあります）"):
                                     try:
                                         review_text = gemini_service.generate_battle_review_and_record(
-                                            unit_topic_name,
+                                            problem.get("topic") or enemy_label,
                                             problem["correct_answer"],
                                             Image.open(img_path),
                                             answer_img_for_review,
@@ -637,6 +641,23 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
 
         st.markdown("---")
 
+    if battle_won:
+        st.success(f"🎉 {enemy_label} を倒しました！")
+        if is_boss:
+            st.success(f"🏆 称号「{cat['final_boss']['title_reward']}」を獲得しました！")
+        if st.button("🗺️ マップに戻ってさらに冒険する", type="primary"):
+            _reset_battle_session()
+            if "field" in st.query_params:
+                del st.query_params["field"]
+            st.rerun()
+    elif battle_lost:
+        st.error("💥 やられてしまった...最初からやり直して挑み直そう！")
+        if st.button("🔄 最初からやり直す"):
+            _reset_battle_session()
+            st.session_state[player_hp_key] = rpg_data.PLAYER_MAX_HP
+            st.session_state[hp_key] = enemy_max_hp
+            st.rerun()
+    elif results_key in st.session_state:
         if st.button("⚔️ 次のバトルに挑む", type="primary"):
             _reset_battle_session()
             st.rerun()
