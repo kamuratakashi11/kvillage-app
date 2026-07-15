@@ -432,6 +432,20 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
         _pop_battle_setup_keys(battle_key)
         rpg_data.clear_battle_state(student_id, battle_key)
 
+    def _continue_battle_round():
+        """まだ両者のHPが残っている状態で次の出題に進む。HPはそのまま引き継ぎ、
+        問題・採点結果だけを入れ替える（「次のバトルに挑む」を押しただけで
+        死んでもいないのに敵や自分のHPが全回復して見えるのを防ぐ）。"""
+        keys_to_remove = [
+            k for k in list(st.session_state.keys())
+            if k in (problems_key, results_key, answer_images_key) or k.startswith(reviews_prefix)
+        ]
+        for k in keys_to_remove:
+            del st.session_state[k]
+        # クリア直後にも保存しておかないと、再描画時にFirestoreの古い（クリア前の）
+        # problemsがそのまま復元されてしまい、新しい問題が出題されなくなる
+        _persist_battle_state()
+
     battle_won = enemy_hp <= 0
     battle_lost = (not battle_won) and player_hp <= 0
 
@@ -455,7 +469,10 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
 
     st.markdown("---")
 
-    if problems_key not in st.session_state and not battle_won and not battle_lost:
+    # 「続けて挑む」で問題・採点結果だけをクリアした直後は、Firestoreに保存された
+    # 空のproblemsがrestoreされてproblems_keyがst.session_stateに存在する状態になる。
+    # 「not in」だけで判定すると新しい問題が出題されないため、中身が空かどうかで判定する。
+    if not st.session_state.get(problems_key) and not battle_won and not battle_lost:
         selected_universities = st.session_state.get(f"battle_universities_{battle_key}") or None
         available = rpg_data.count_available_battle_problems(category_id, unit_topic_name, universities=selected_universities)
         if available == 0:
@@ -663,6 +680,6 @@ def render_battle(unit_id, student_id, student_name, api_key, category_id, num_q
             st.session_state[hp_key] = enemy_max_hp
             st.rerun()
     elif results_key in st.session_state:
-        if st.button("⚔️ 次のバトルに挑む", type="primary"):
-            _reset_battle_session()
+        if st.button("⚔️ 続けて挑む（HPはそのまま次の問題へ）", type="primary"):
+            _continue_battle_round()
             st.rerun()
