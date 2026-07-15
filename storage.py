@@ -4,6 +4,7 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import firestore
+from google.cloud.firestore_v1.field_path import FieldPath
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "db.json")
@@ -87,3 +88,43 @@ def save_json(path, data):
         # 次の再描画でも表示できるようセッションに保持しておく
         st.session_state["_pending_storage_error"] = message
         st.error(message)
+
+
+def update_student_field(path, student_id, *sub_keys, value):
+    """load_json→（生徒ごとのキーだけ書き換え）→save_jsonという流れだと、
+    全生徒共有の1ドキュメントを丸ごと読み書きするため、他の生徒が同時に保存すると
+    お互いの更新を古い内容で上書きしてしまう（例: バトル中に倒したはずの敵のHPが巻き戻る）。
+    Firestoreのネストフィールド指定updateを使い、この生徒のこのフィールドだけを
+    サーバー側でアトミックに更新することで、この競合を避ける。"""
+    if db_client is None:
+        st.session_state["_pending_storage_error"] = f"🚨 **DB保存エラー**: Firestoreが初期化されていません（{db_error}）"
+        return
+
+    doc_name = os.path.basename(path).replace(".json", "")
+    doc_ref = db_client.collection("kvillage_data").document(doc_name)
+    field_path = FieldPath("data", student_id, *sub_keys)
+    try:
+        doc_ref.update({field_path: value})
+    except Exception:
+        # ドキュメント自体がまだ存在しない場合はここで作成してから再試行する
+        try:
+            doc_ref.set({}, merge=True)
+            doc_ref.update({field_path: value})
+        except Exception as e:
+            message = f"🚨 **DB保存エラー ({doc_name})**: {e}"
+            st.session_state["_pending_storage_error"] = message
+            st.error(message)
+
+
+def delete_student_field(path, student_id, *sub_keys):
+    """update_student_fieldの削除版。指定フィールドが元々無い場合は何もしない。"""
+    if db_client is None:
+        return
+
+    doc_name = os.path.basename(path).replace(".json", "")
+    doc_ref = db_client.collection("kvillage_data").document(doc_name)
+    field_path = FieldPath("data", student_id, *sub_keys)
+    try:
+        doc_ref.update({field_path: firestore.DELETE_FIELD})
+    except Exception:
+        pass
