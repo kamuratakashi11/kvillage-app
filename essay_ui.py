@@ -104,6 +104,18 @@ def render_practice_page(student_id, student_name, api_key):
         st.rerun()
 
 
+def _render_manuscript_template_download():
+    if os.path.exists(essay_data.MANUSCRIPT_TEMPLATE_PATH):
+        with open(essay_data.MANUSCRIPT_TEMPLATE_PATH, "rb") as f:
+            st.download_button(
+                "📄 400字詰め原稿用紙のテンプレートをダウンロード（ノートアプリに読み込んで手書き用）",
+                data=f.read(),
+                file_name="essay_manuscript_template.pdf",
+                mime="application/pdf",
+                key="essay_practice_template_download",
+            )
+
+
 def _render_ai_theme_section(student_id, target_faculty, target_faculty_detail, api_key):
     current_theme = essay_data.get_current_theme(student_id)
     if not current_theme or current_theme.get("source") != "ai_auto":
@@ -133,6 +145,7 @@ def _render_ai_theme_section(student_id, target_faculty, target_faculty_detail, 
                 st.rerun()
             except Exception as e:
                 st.error(gemini_service.describe_gemini_error(e))
+    _render_manuscript_template_download()
     return current_theme["theme_text"]
 
 
@@ -165,6 +178,7 @@ def _render_brought_in_theme_section(api_key):
             height=150,
         )
         st.session_state["essay_practice_brought_in_text"] = edited
+        _render_manuscript_template_download()
         return edited
     return None
 
@@ -182,16 +196,6 @@ def _render_submission_section(api_key):
         return text if text.strip() else None
 
     st.caption("紙に手書きした写真、またはノートアプリ（GoodNotes等）から書き出したPDF・画像をアップロードしてください（複数ページ可）。")
-
-    if os.path.exists(essay_data.MANUSCRIPT_TEMPLATE_PATH):
-        with open(essay_data.MANUSCRIPT_TEMPLATE_PATH, "rb") as f:
-            st.download_button(
-                "📄 400字詰め原稿用紙のテンプレートをダウンロード（ノートアプリに読み込んで手書き用）",
-                data=f.read(),
-                file_name="essay_manuscript_template.pdf",
-                mime="application/pdf",
-                key="essay_practice_template_download",
-            )
 
     uploaded_files = st.file_uploader(
         "原稿用紙の写真・PDF（複数ページ可、ページ順にアップロード）",
