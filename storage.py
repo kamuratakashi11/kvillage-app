@@ -195,7 +195,6 @@ def consume_student_resource(path, student_id, field_name, amount):
 
 
 IMAGES_ARCHIVE_BLOB_PREFIX = "pdf_images/"
-CURRENT_IMAGES_BACKUP_BLOB = IMAGES_ARCHIVE_BLOB_PREFIX + "pdf_images_current_backup.zip"
 
 
 def upload_images_archive():
@@ -223,12 +222,21 @@ def upload_images_archive():
         return False, f"アップロードに失敗しました: {e}"
 
 
-def backup_pdf_images_dir():
-    """現在のpdf_images/フォルダの中身を丸ごとzip化してFirebase Storageにアップロードする。
+def backup_pdf_images(filenames=None, skip_existing=False):
+    """pdf_images/内の画像をFirebase Storageに1ファイル=1オブジェクトとして個別にアップロードする。
     模試PDFの自動取り込み等で新しく追加された問題画像は、upload_images_archive()（同梱の
     images_part*.zipのみが対象）ではバックアップされず、ローカルディスクにしか存在しない。
     Streamlit Cloudはコンテナ再起動でローカルディスクの内容がリセットされるため、新規取り込みの
-    保存が完了するたびにこの関数を呼び、最新のpdf_images/全体を退避しておく必要がある。
+    保存が完了するたびにこの関数を呼ぶ必要がある。
+
+    以前はpdf_images/フォルダ全体を毎回まるごとzip化して再アップロードしていたが、
+    取り込み件数が増えるほど転送量が際限なく膨らむため、個別ファイルの差分アップロード方式に変更した。
+
+    filenames: バックアップ対象のファイル名リスト（pdf_images/直下）。Noneならフォルダ内の
+               全ファイルを対象にする。
+    skip_existing: Trueなら、バケットに同名のオブジェクトが既に存在するファイルはアップロードを
+                   スキップする（「今すぐ全画像をバックアップする」ボタンでの重複アップロードを防ぐ）。
+                   新規取り込み直後の自動呼び出しでは、対象は確実に新規ファイルなのでFalseのままでよい。
     戻り値: (成功したか, メッセージ)"""
     bucket = get_storage_bucket()
     if bucket is None:
@@ -237,31 +245,46 @@ def backup_pdf_images_dir():
     if not os.path.exists(IMG_DIR):
         return False, "pdf_images/ が見つかりませんでした。"
 
-    tmp_zip_path = os.path.join(BASE_DIR, "_pdf_images_current_backup.zip")
-    try:
-        with zipfile.ZipFile(tmp_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for root, _dirs, files in os.walk(IMG_DIR):
-                for filename in files:
-                    file_path = os.path.join(root, filename)
-                    arcname = os.path.join("pdf_images", os.path.relpath(file_path, IMG_DIR))
-                    zf.write(file_path, arcname=arcname)
+    if filenames is None:
+        filenames = os.listdir(IMG_DIR)
 
-        blob = bucket.blob(CURRENT_IMAGES_BACKUP_BLOB)
-        blob.upload_from_filename(tmp_zip_path)
-        return True, "画像のバックアップが完了しました。"
+    uploaded_count = 0
+    skipped_count = 0
+    try:
+        for filename in filenames:
+            file_path = os.path.join(IMG_DIR, filename)
+            if not os.path.isfile(file_path):
+                continue
+
+            blob = bucket.blob(IMAGES_ARCHIVE_BLOB_PREFIX + filename)
+            if skip_existing:
+                try:
+                    if blob.exists():
+                        skipped_count += 1
+                        continue
+                except Exception:
+                    pass  # 存在確認に失敗しても、念のためアップロードは試みる
+
+            blob.upload_from_filename(file_path)
+            uploaded_count += 1
+        return True, f"{uploaded_count}件の画像をバックアップしました（{skipped_count}件は既存のためスキップ）。"
     except Exception as e:
         return False, f"バックアップに失敗しました: {e}"
-    finally:
-        if os.path.exists(tmp_zip_path):
-            os.remove(tmp_zip_path)
 
 
 def ensure_pdf_images_extracted():
     """pdf_images/ が無ければ、まずFirebase Storageに退避済みのバックアップから復元を試みる。
     バケットに無ければ、リポジトリ同梱のimages_part*.zip（移行完了後は削除される想定の
-    互換フォールバック）から復元する。"""
+    互換フォールバック）から復元する。
+
+    Firebase Storage上には2種類のオブジェクトが混在しうる:
+    - 過去の移行・一括バックアップで作られたzipアーカイブ（拡張子.zip）→ダウンロードして展開する
+    - 新規取り込みのたびに個別アップロードされた画像ファイル→pdf_images/直下にそのままダウンロードする
+    """
     if os.path.exists(IMG_DIR):
         return
+
+    restored_any = False
 
     bucket = get_storage_bucket()
     if bucket is not None:
@@ -271,17 +294,25 @@ def ensure_pdf_images_extracted():
             blobs = []
             st.session_state["_pending_storage_error"] = f"🚨 **画像復元エラー**: Firebase Storageの一覧取得に失敗しました（{e}）。同梱の画像データがあればそちらを使用します。"
 
-        if blobs:
+        os.makedirs(IMG_DIR, exist_ok=True)
+        for blob in blobs:
             try:
-                for blob in blobs:
+                if blob.name.endswith(".zip"):
                     tmp_zip = os.path.join(BASE_DIR, "_" + os.path.basename(blob.name))
                     blob.download_to_filename(tmp_zip)
                     with zipfile.ZipFile(tmp_zip, "r") as zip_ref:
                         zip_ref.extractall(BASE_DIR)
                     os.remove(tmp_zip)
-                return
+                else:
+                    filename = os.path.basename(blob.name)
+                    if filename:
+                        blob.download_to_filename(os.path.join(IMG_DIR, filename))
+                restored_any = True
             except Exception as e:
-                st.session_state["_pending_storage_error"] = f"🚨 **画像復元エラー**: Firebase Storageからのダウンロードに失敗しました（{e}）。同梱の画像データがあればそちらを使用します。"
+                st.session_state["_pending_storage_error"] = f"🚨 **画像復元エラー**: Firebase Storageからのダウンロードに失敗しました（{blob.name}: {e}）。他のファイルの復元は続行します。"
+
+    if restored_any:
+        return
 
     # フォールバック: リポジトリ同梱のzip（Firebase Storageへの移行・確認が済んだらgit履歴から削除する想定）
     zip_files = glob.glob(os.path.join(BASE_DIR, "images_part*.zip"))
