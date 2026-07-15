@@ -17,6 +17,9 @@ RUBRIC_CRITERIA = [
 
 REVIEW_QUEUE_PATH = os.path.join(BASE_DIR, "essay_review_queue.json")
 
+# ノートアプリ（GoodNotes等）で書く生徒向けに配布する、400字詰め原稿用紙のテンプレート
+MANUSCRIPT_TEMPLATE_PATH = os.path.join(BASE_DIR, "essay_manuscript_template.pdf")
+
 # 教師レビューキューに溜め続けると際限なく肥大化するため、古いレビュー済みエントリは
 # 一定件数を超えたら間引く（未レビューのエントリは常に残す）
 REVIEW_QUEUE_MAX_REVIEWED = 500

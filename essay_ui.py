@@ -1,3 +1,5 @@
+import os
+
 from PIL import Image
 import streamlit as st
 
@@ -180,6 +182,17 @@ def _render_submission_section(api_key):
         return text if text.strip() else None
 
     st.caption("紙に手書きした写真、またはノートアプリ（GoodNotes等）から書き出したPDF・画像をアップロードしてください（複数ページ可）。")
+
+    if os.path.exists(essay_data.MANUSCRIPT_TEMPLATE_PATH):
+        with open(essay_data.MANUSCRIPT_TEMPLATE_PATH, "rb") as f:
+            st.download_button(
+                "📄 400字詰め原稿用紙のテンプレートをダウンロード（ノートアプリに読み込んで手書き用）",
+                data=f.read(),
+                file_name="essay_manuscript_template.pdf",
+                mime="application/pdf",
+                key="essay_practice_template_download",
+            )
+
     uploaded_files = st.file_uploader(
         "原稿用紙の写真・PDF（複数ページ可、ページ順にアップロード）",
         type=["png", "jpg", "jpeg", "pdf"],
