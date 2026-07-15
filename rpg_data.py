@@ -1,6 +1,9 @@
 import random
 
-from storage import load_json, save_json, STUDENTS_DATA_PATH, DB_PATH, BATTLE_STATE_PATH
+from storage import (
+    load_json, save_json, update_student_field, delete_student_field,
+    STUDENTS_DATA_PATH, DB_PATH, BATTLE_STATE_PATH,
+)
 
 # --- 「入試」ダンジョン専用の単元タクソノミー（既存の入試問題データのtopicタグと対応） ---
 UNITS = [
@@ -214,10 +217,10 @@ def compute_unit_states(category_id, field_progress):
     states = {}
     for u in units_by_order:
         entry = field_progress.get(u["id"], {})
-        if entry.get("skipped", False):
-            states[u["id"]] = "skipped"
-        elif entry.get("defeated", 0) > 0:
+        if entry.get("defeated", 0) > 0:
             states[u["id"]] = "cleared"
+        elif entry.get("skipped", False):
+            states[u["id"]] = "skipped"
         else:
             states[u["id"]] = "locked"
 
@@ -230,38 +233,34 @@ def compute_unit_states(category_id, field_progress):
 
 
 def record_unit_win(student_id, category_id, unit_id):
-    data = load_json(STUDENTS_DATA_PATH, {})
-    student = data.get(student_id, {})
-    student, _ = ensure_rpg_fields(student)
+    # load_json+save_jsonで生徒全員共有の1ドキュメントを丸ごと読み書きすると、
+    # 他の生徒が同時に保存した際にお互いの更新を上書きしてしまうため、
+    # この生徒のこの分野のフィールドだけをアトミックに更新する
+    student = load_student_with_rpg_fields(student_id)
     dp = student["dungeon_progress"][category_id]
-    dp["field_progress"].setdefault(unit_id, {"defeated": 0})
-    dp["field_progress"][unit_id]["defeated"] += 1
-    data[student_id] = student
-    save_json(STUDENTS_DATA_PATH, data)
+    current = dp["field_progress"].get(unit_id, {"defeated": 0})
+    entry = {"defeated": current.get("defeated", 0) + 1}
+    dp["field_progress"][unit_id] = entry
+    update_student_field(STUDENTS_DATA_PATH, student_id, "dungeon_progress", category_id, "field_progress", unit_id, value=entry)
     return student
 
 
 def record_unit_skip(student_id, category_id, unit_id):
     """演習をせず、この分野をクリア扱いにして次の分野に進む（苦手分野で詰まったとき・数学Ⅲ不要な生徒向け）"""
-    data = load_json(STUDENTS_DATA_PATH, {})
-    student = data.get(student_id, {})
-    student, _ = ensure_rpg_fields(student)
-    dp = student["dungeon_progress"][category_id]
-    dp["field_progress"][unit_id] = {"defeated": 0, "skipped": True}
-    data[student_id] = student
-    save_json(STUDENTS_DATA_PATH, data)
+    student = load_student_with_rpg_fields(student_id)
+    entry = {"defeated": 0, "skipped": True}
+    student["dungeon_progress"][category_id]["field_progress"][unit_id] = entry
+    update_student_field(STUDENTS_DATA_PATH, student_id, "dungeon_progress", category_id, "field_progress", unit_id, value=entry)
     return student
 
 
 def record_boss_win(student_id, category_id):
-    data = load_json(STUDENTS_DATA_PATH, {})
-    student = data.get(student_id, {})
-    student, _ = ensure_rpg_fields(student)
+    student = load_student_with_rpg_fields(student_id)
     dp = student["dungeon_progress"][category_id]
     dp["boss_defeated"] = True
     dp["title"] = CATEGORY_MAP[category_id]["final_boss"]["title_reward"]
-    data[student_id] = student
-    save_json(STUDENTS_DATA_PATH, data)
+    update_student_field(STUDENTS_DATA_PATH, student_id, "dungeon_progress", category_id, "boss_defeated", value=True)
+    update_student_field(STUDENTS_DATA_PATH, student_id, "dungeon_progress", category_id, "title", value=dp["title"])
     return student
 
 
@@ -339,13 +338,12 @@ def load_battle_state(student_id, battle_key):
 
 
 def save_battle_state(student_id, battle_key, state):
-    data = load_json(BATTLE_STATE_PATH, {})
-    data.setdefault(student_id, {})[battle_key] = state
-    save_json(BATTLE_STATE_PATH, data)
+    # 全生徒共有の1ドキュメントを読み込んでから丸ごと書き戻すと、他の生徒が同時に
+    # バトル状態を保存した際にお互いの更新を古い内容で上書きしてしまう
+    # （例: 敵を倒したはずのHPが、他の生徒の保存によって巻き戻って見える）。
+    # この生徒のこのバトルのフィールドだけをアトミックに更新することでこれを防ぐ。
+    update_student_field(BATTLE_STATE_PATH, student_id, battle_key, value=state)
 
 
 def clear_battle_state(student_id, battle_key):
-    data = load_json(BATTLE_STATE_PATH, {})
-    if student_id in data and battle_key in data[student_id]:
-        del data[student_id][battle_key]
-        save_json(BATTLE_STATE_PATH, data)
+    delete_student_field(BATTLE_STATE_PATH, student_id, battle_key)
