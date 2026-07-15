@@ -25,13 +25,14 @@ from storage import load_json, save_json, SESSIONS_PATH
 DEFAULT_TTL_SECONDS = 30 * 24 * 3600  # 30日
 
 
-def create_session(student_id, is_master=False, ttl_seconds=DEFAULT_TTL_SECONDS):
+def create_session(student_id, is_master=False, is_essay_teacher=False, ttl_seconds=DEFAULT_TTL_SECONDS):
     """新しいセッショントークンを発行して保存し、トークン文字列を返す。"""
     sessions = load_json(SESSIONS_PATH, {})
     token = pysecrets.token_urlsafe(32)
     sessions[token] = {
         "student_id": student_id,
         "is_master": is_master,
+        "is_essay_teacher": is_essay_teacher,
         "expires_at": time.time() + ttl_seconds,
     }
     save_json(SESSIONS_PATH, sessions)
@@ -39,7 +40,7 @@ def create_session(student_id, is_master=False, ttl_seconds=DEFAULT_TTL_SECONDS)
 
 
 def resolve_session(token):
-    """トークンが有効なら (student_id, is_master) を、無効・期限切れなら None を返す。"""
+    """トークンが有効なら (student_id, is_master, is_essay_teacher) を、無効・期限切れなら None を返す。"""
     if not token:
         return None
     sessions = load_json(SESSIONS_PATH, {})
@@ -48,7 +49,7 @@ def resolve_session(token):
         return None
     if entry.get("expires_at", 0) < time.time():
         return None
-    return entry.get("student_id"), bool(entry.get("is_master", False))
+    return entry.get("student_id"), bool(entry.get("is_master", False)), bool(entry.get("is_essay_teacher", False))
 
 
 def delete_session(token):

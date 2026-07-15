@@ -5,7 +5,7 @@ import fitz  # PyMuPDF
 from PIL import Image
 
 
-def convert_pdf_to_image(uploaded_file):
+def convert_pdf_to_image(uploaded_file, scale=2.0):
     # PDFの中身がストリームだと正常に全ページ読み込めない場合があるため、一度一時ファイルに保存する
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(uploaded_file.getvalue())
@@ -15,7 +15,7 @@ def convert_pdf_to_image(uploaded_file):
     try:
         doc = fitz.open(tmp_path)
         images = []
-        mat = fitz.Matrix(2.0, 2.0)
+        mat = fitz.Matrix(scale, scale)
         for i in range(len(doc)):
             page = doc[i]
             pix = page.get_pixmap(matrix=mat)

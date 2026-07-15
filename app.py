@@ -22,6 +22,7 @@ import pdf_ingestion
 import theme
 import gas_auth
 import session_store
+import essay_ui
 
 # 共通設定 (Kvillage先生仕様)
 st.set_page_config(
@@ -38,6 +39,7 @@ ensure_pdf_images_extracted()
 # Secretsで管理する（このリポジトリは公開設定のため、書くとGitHub上で誰でも読めてしまう）
 MASTER_PASSWORD = st.secrets.get("MASTER_PASSWORD", "")
 SECRET_WORD = st.secrets.get("SECRET_WORD", "")  # 教室の合言葉
+ESSAY_TEACHER_PASSWORD = st.secrets.get("ESSAY_TEACHER_PASSWORD", "")  # 小論文専任教師用パスワード
 
 import io
 import base64
@@ -198,21 +200,30 @@ def check_password_and_login():
     if "token" in query_params and not st.session_state.get("logged_in"):
         resolved = session_store.resolve_session(query_params["token"])
         if resolved:
-            sid, is_master_session = resolved
+            sid, is_master_session, is_essay_teacher_session = resolved
             if is_master_session and MASTER_PASSWORD:
                 st.session_state["logged_in"] = True
                 st.session_state["student_id"] = "master"
                 st.session_state["student_name"] = "Kvillage先生"
                 st.session_state["is_guest"] = False
                 st.session_state["is_master"] = True
-            elif not is_master_session and sid in users:
+                st.session_state["is_essay_teacher"] = False
+            elif is_essay_teacher_session and ESSAY_TEACHER_PASSWORD:
+                st.session_state["logged_in"] = True
+                st.session_state["student_id"] = "essay_teacher"
+                st.session_state["student_name"] = "小論文担当の先生"
+                st.session_state["is_guest"] = False
+                st.session_state["is_master"] = False
+                st.session_state["is_essay_teacher"] = True
+            elif not is_master_session and not is_essay_teacher_session and sid in users:
                 st.session_state["logged_in"] = True
                 st.session_state["student_id"] = sid
                 st.session_state["student_name"] = users[sid]
                 st.session_state["is_guest"] = False
                 st.session_state["is_master"] = False
+                st.session_state["is_essay_teacher"] = False
                 process_daily_login(sid)
-            
+
     if "logged_in" not in st.session_state:
         st.session_state["logged_in"] = False
         
@@ -232,7 +243,17 @@ def check_password_and_login():
                     st.session_state["student_name"] = "Kvillage先生"
                     st.session_state["is_guest"] = False
                     st.session_state["is_master"] = True
+                    st.session_state["is_essay_teacher"] = False
                     st.query_params.token = session_store.create_session("master", is_master=True)
+                    st.rerun()
+                elif ESSAY_TEACHER_PASSWORD and login_pass == ESSAY_TEACHER_PASSWORD:
+                    st.session_state["logged_in"] = True
+                    st.session_state["student_id"] = "essay_teacher"
+                    st.session_state["student_name"] = "小論文担当の先生"
+                    st.session_state["is_guest"] = False
+                    st.session_state["is_master"] = False
+                    st.session_state["is_essay_teacher"] = True
+                    st.query_params.token = session_store.create_session("essay_teacher", is_essay_teacher=True)
                     st.rerun()
                 elif login_pass in users:
                     st.session_state["logged_in"] = True
@@ -240,6 +261,7 @@ def check_password_and_login():
                     st.session_state["student_name"] = users[login_pass]
                     st.session_state["is_guest"] = False
                     st.session_state["is_master"] = False
+                    st.session_state["is_essay_teacher"] = False
                     st.query_params.token = session_store.create_session(login_pass, is_master=False)
                     process_daily_login(login_pass)
                     st.rerun()
@@ -270,7 +292,7 @@ def check_password_and_login():
                         st.error("パスワードは6文字以上にしてください。")
                     elif not (re.search(r'[A-Za-z]', new_pass) and re.search(r'[0-9]', new_pass)):
                         st.error("パスワードには、アルファベット（英字）と数字を両方とも含めてください。")
-                    elif new_pass in users or new_pass == MASTER_PASSWORD:
+                    elif new_pass in users or new_pass == MASTER_PASSWORD or (ESSAY_TEACHER_PASSWORD and new_pass == ESSAY_TEACHER_PASSWORD):
                         st.error("そのパスワードは既に使われています。別のパスワードを考えてね！")
                     else:
                         # 登録処理
@@ -404,10 +426,11 @@ def main():
     student_name = st.session_state["student_name"]
     is_guest = st.session_state.get("is_guest", False)
     is_master = st.session_state.get("is_master", False)
-        
+    is_essay_teacher = st.session_state.get("is_essay_teacher", False)
+
     st.sidebar.title(f"ようこそ、{student_name}さん！")
-    
-    if not is_master:
+
+    if not is_master and not is_essay_teacher:
         student_data = load_json(STUDENTS_DATA_PATH, {}).get(student_id, {})
         tickets = student_data.get("tickets", 0)
         level = student_data.get("level", 1)
@@ -430,8 +453,11 @@ def main():
     # 権限に応じたメニューの切り替え
     if is_master:
         menu_options = ["⚙️ 先生専用管理ダッシュボード", "🏷️ 問題のタグ付け作業", "🗺️ 数学冒険マップ", "🤖 AI自動添削", "📚 NotebookLM連携マニュアル"]
+    elif is_essay_teacher:
+        # 小論文専任教師は、提出の閲覧・コメント追加のみに権限を限定する
+        menu_options = ["📝 小論文レビュー"]
     else:
-        menu_options = ["演習プリント作成", "復習プリント作成", "🗺️ 数学冒険マップ", "🤖 AI自動添削", "📚 NotebookLM連携マニュアル"]
+        menu_options = ["演習プリント作成", "復習プリント作成", "🗺️ 数学冒険マップ", "🤖 AI自動添削", "✍️ 小論文添削", "📊 小論文 対策レポート", "📚 NotebookLM連携マニュアル"]
 
     # マップのフィールドリンク経由でページ全体が再読み込みされた場合、メニューの初期選択もマップに合わせる
     default_menu_index = 0
@@ -530,7 +556,7 @@ def main():
                     st.error("パスワードは6文字以上にしてください。")
                 elif not (re.search(r'[A-Za-z]', new_pwd) and re.search(r'[0-9]', new_pwd)):
                     st.error("パスワードには、アルファベット（英字）と数字を両方とも含めてください。")
-                elif new_pwd in users or new_pwd == "guest" or new_pwd == MASTER_PASSWORD:
+                elif new_pwd in users or new_pwd == "guest" or new_pwd == MASTER_PASSWORD or (ESSAY_TEACHER_PASSWORD and new_pwd == ESSAY_TEACHER_PASSWORD):
                     st.error("そのパスワードは既に別の人が使っています。")
                 else:
                     # usersの変更
@@ -1333,6 +1359,17 @@ def main():
                 f'style="border:none;" allow="clipboard-write"></iframe>',
                 unsafe_allow_html=True,
             )
+
+    elif page == "✍️ 小論文添削":
+        essay_api_key = st.secrets.get("GEMINI_API_KEY", "")
+        essay_ui.render_practice_page(student_id, student_name, essay_api_key)
+
+    elif page == "📊 小論文 対策レポート":
+        essay_api_key = st.secrets.get("GEMINI_API_KEY", "")
+        essay_ui.render_report_page(student_id, student_name, essay_api_key)
+
+    elif page == "📝 小論文レビュー":
+        essay_ui.render_teacher_review_page()
 
     elif page == "📚 NotebookLM連携マニュアル":
         st.title("📚 NotebookLMで自分専用の復習テストを作る方法")
