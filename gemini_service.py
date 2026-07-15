@@ -298,6 +298,7 @@ def generate_battle_review_and_record(unit_name, correct_answer, problem_image, 
 1. **正誤判定と添削**: 生徒の解答のどこが合っていて、どこが間違っているかを具体的に指摘してください。間違っている場合は、どの考え方・公式を修正すればよいか丁寧に教えてください。
 2. **発想の動機の解説**: ただ公式を当てはめるだけでなく、「なぜここでその公式を使うのか（発想の動機）」を必ず丁寧に語ってください。
 3. **対話の継続**: 生徒から追加の質問が来ることを想定し、一方的に終わらせず、対話を続ける姿勢で答えてください。
+4. **簡潔さ**: 同じ指摘・結論を言い回しを変えて何度も繰り返さないでください。一つの論点は一度だけ、簡潔に述べてください。
 
 # トーン＆スタイル（Tone & Style）
 - 口調は「です・ます」調を使用してください。
@@ -321,5 +322,10 @@ def generate_battle_review_and_record(unit_name, correct_answer, problem_image, 
 【今後の学習方針】
 ---
 """
-    response = generate_with_fallback(api_key, [prompt, problem_image, answer_image], {})
+    # max_output_tokensを指定しないと、モデルが同じ指摘を言い回しを変えて延々と
+    # 繰り返す「反復退化」を起こし、分析ノートDocsが際限なく膨張することがあるため、
+    # 自由記述の添削文にも上限を設けておく
+    response = generate_with_fallback(
+        api_key, [prompt, problem_image, answer_image], {"max_output_tokens": 4096}
+    )
     return response.text
