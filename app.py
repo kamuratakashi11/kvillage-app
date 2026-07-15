@@ -312,22 +312,29 @@ def generate_pdf(selected_univs, num_questions, student_id, is_review=False, rev
             
     if topic_filter == "1a2bc":
         pool = [item for item in pool if item.get("topic") != "数学Ⅲ" or item.get("university") == "東京海洋大"]
-    
+
+    # 画像ファイルが実際には存在しない問題（データ不整合）を除外しておく。
+    # これをしないと、選ばれた問題が偶然すべて画像欠損だった場合に0ページのPDFを
+    # 保存しようとして "cannot save with zero pages" でアプリごとクラッシュする。
+    pool = [item for item in pool if os.path.exists(os.path.join(IMG_DIR, item.get("image_file", "")))]
+
     if not pool:
         return None, 0
-        
+
     count = min(num_questions, len(pool))
     selected_items = random.sample(pool, count)
-    
+
     out_doc = fitz.open()
     for item in selected_items:
         img_path = os.path.join(IMG_DIR, item.get("image_file", ""))
-        if os.path.exists(img_path):
-            img_doc = fitz.open(img_path)
-            pdf_bytes = img_doc.convert_to_pdf()
-            img_pdf = fitz.open("pdf", pdf_bytes)
-            out_doc.insert_pdf(img_pdf)
-            
+        img_doc = fitz.open(img_path)
+        pdf_bytes = img_doc.convert_to_pdf()
+        img_pdf = fitz.open("pdf", pdf_bytes)
+        out_doc.insert_pdf(img_pdf)
+
+    if out_doc.page_count == 0:
+        return None, 0
+
     pdf_data = out_doc.write()
     
     # 履歴の更新（ゲストは保存しない）
@@ -1014,6 +1021,10 @@ def main():
 
             if selected_keywords:
                 matched_items = [item for item in db if any(kw in item.get("keywords", []) for kw in selected_keywords)]
+                # 画像ファイルが実際には存在しない問題（データ不整合）を除外しておく。
+                # これをしないと、選ばれた問題が偶然すべて画像欠損だった場合に0ページのPDFを
+                # 保存しようとして "cannot save with zero pages" でアプリごとクラッシュする。
+                matched_items = [item for item in matched_items if os.path.exists(os.path.join(IMG_DIR, item.get("image_file", "")))]
                 st.write(f"※該当する問題数: **{len(matched_items)}問**")
 
                 if not matched_items:
@@ -1028,21 +1039,23 @@ def main():
                             out_doc = fitz.open()
                             for item in selected_items:
                                 img_path = os.path.join(IMG_DIR, item.get("image_file", ""))
-                                if os.path.exists(img_path):
-                                    img_doc = fitz.open(img_path)
-                                    pdf_bytes = img_doc.convert_to_pdf()
-                                    img_pdf = fitz.open("pdf", pdf_bytes)
-                                    out_doc.insert_pdf(img_pdf)
-                            pdf_data = out_doc.write()
+                                img_doc = fitz.open(img_path)
+                                pdf_bytes = img_doc.convert_to_pdf()
+                                img_pdf = fitz.open("pdf", pdf_bytes)
+                                out_doc.insert_pdf(img_pdf)
+                            pdf_data = out_doc.write() if out_doc.page_count > 0 else None
 
-                        st.success(f"「{'、'.join(selected_keywords)}」の問題を {num_q_kw}問 集めたプリントを作成しました！")
-                        st.download_button(
-                            label="📥 PDFをダウンロード",
-                            data=pdf_data,
-                            file_name=f"単元演習_{'_'.join(selected_keywords)}.pdf",
-                            mime="application/pdf",
-                            key="dl_keyword_pdf"
-                        )
+                        if pdf_data is None:
+                            st.error("プリントの作成に失敗しました。")
+                        else:
+                            st.success(f"「{'、'.join(selected_keywords)}」の問題を {num_q_kw}問 集めたプリントを作成しました！")
+                            st.download_button(
+                                label="📥 PDFをダウンロード",
+                                data=pdf_data,
+                                file_name=f"単元演習_{'_'.join(selected_keywords)}.pdf",
+                                mime="application/pdf",
+                                key="dl_keyword_pdf"
+                            )
 
         st.markdown("---")
         st.subheader("✍️ 個別での確認・修正")
