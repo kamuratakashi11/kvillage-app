@@ -10,7 +10,7 @@ import re
 from storage import (
     BASE_DIR, DB_PATH, IMG_DIR, USERS_PATH, HISTORY_PATH,
     STUDENTS_DATA_PATH, db_error, load_json, save_json,
-    ensure_pdf_images_extracted, upload_images_archive, backup_pdf_images_dir,
+    ensure_pdf_images_extracted, upload_images_archive, backup_pdf_images,
 )
 from student_state import (
     init_student_data, process_daily_login, get_level_info,
@@ -530,7 +530,7 @@ def main():
         )
         if st.button("🔄 現在の全画像を今すぐバックアップする"):
             with st.spinner("バックアップ中です…（画像量によっては数分かかることがあります）"):
-                ok2, message2 = backup_pdf_images_dir()
+                ok2, message2 = backup_pdf_images(skip_existing=True)
             if ok2:
                 st.success(message2)
             else:
@@ -804,6 +804,10 @@ def main():
                     st.markdown("---")
 
                 if st.button("💾 この内容でデータベースに保存する", type="primary", key="ingest_commit_btn"):
+                    new_filenames = [
+                        item.get("image_file") for item in st.session_state["ingest_preview_items"]
+                        if item.get("image_file")
+                    ]
                     ingest_db = load_json(DB_PATH, [])
                     ingest_db.extend(
                         pdf_ingestion.strip_preview_fields(item)
@@ -813,7 +817,7 @@ def main():
                     st.session_state["ingest_preview_items"] = None
                     st.session_state["ingest_detected_configs"] = None
                     st.success("データベースに保存しました！")
-                    backup_ok, backup_msg = backup_pdf_images_dir()
+                    backup_ok, backup_msg = backup_pdf_images(new_filenames)
                     if not backup_ok:
                         st.warning(f"⚠️ 画像のクラウドバックアップに失敗しました（データベースへの保存自体は成功しています）: {backup_msg}")
                     st.rerun()
@@ -905,12 +909,16 @@ def main():
                     st.markdown("---")
 
                 if st.button("💾 この内容でデータベースに保存する", type="primary", key="ingest_p1_commit_btn"):
+                    new_filenames_p1 = [
+                        item.get("image_file") for item in st.session_state["ingest_p1_preview_items"]
+                        if item.get("image_file")
+                    ]
                     ingest_db_p1 = load_json(DB_PATH, [])
                     ingest_db_p1.extend(st.session_state["ingest_p1_preview_items"])
                     save_json(DB_PATH, ingest_db_p1)
                     st.session_state["ingest_p1_preview_items"] = None
                     st.success("データベースに保存しました！")
-                    backup_ok_p1, backup_msg_p1 = backup_pdf_images_dir()
+                    backup_ok_p1, backup_msg_p1 = backup_pdf_images(new_filenames_p1)
                     if not backup_ok_p1:
                         st.warning(f"⚠️ 画像のクラウドバックアップに失敗しました（データベースへの保存自体は成功しています）: {backup_msg_p1}")
                     st.rerun()
