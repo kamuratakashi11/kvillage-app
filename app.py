@@ -536,6 +536,50 @@ def main():
             else:
                 st.error(message2)
 
+        # --- 💡【追加】画像が見つからない「幽霊データ」のお掃除 ---
+        st.markdown("---")
+        st.subheader("🧹 画像が見つからない問題のお掃除")
+        st.write(
+            "コンテナ再起動時に画像だけが失われ、データベース側にはデータが残ってしまった"
+            "「幽霊データ」を一覧・削除できます。画像が存在しない問題は演習プリント作成等でも"
+            "実際には使われないため、削除しても実害はありません。"
+        )
+        if st.button("🔍 スキャンする", key="ghost_scan_btn"):
+            scan_db = load_json(DB_PATH, [])
+            ghost_items = [
+                item for item in scan_db
+                if not os.path.exists(os.path.join(IMG_DIR, item.get("image_file", "")))
+            ]
+            st.session_state["ghost_items"] = ghost_items
+
+        if "ghost_items" in st.session_state:
+            ghost_items = st.session_state["ghost_items"]
+            if not ghost_items:
+                st.success("画像が見つからない問題はありませんでした。")
+            else:
+                st.warning(f"⚠️ 画像が見つからない問題が **{len(ghost_items)}件** 見つかりました。")
+
+                ghost_counts = {}
+                for item in ghost_items:
+                    key = f"{item.get('university') or '(大学名なし)'}（{item.get('category') or '(分類なし)'}）"
+                    ghost_counts[key] = ghost_counts.get(key, 0) + 1
+                for key, count in sorted(ghost_counts.items()):
+                    st.write(f"- {key}: {count}件")
+
+                with st.expander("詳細一覧を見る"):
+                    for item in ghost_items:
+                        st.caption(f"{item.get('university', '?')} / {item.get('category', '?')} / {item.get('image_file', '?')}")
+
+                if st.button("🗑️ この幽霊データをすべて削除する", type="primary", key="ghost_delete_btn"):
+                    ghost_image_files = {item.get("image_file") for item in ghost_items}
+                    fresh_db = load_json(DB_PATH, [])
+                    cleaned_db = [item for item in fresh_db if item.get("image_file") not in ghost_image_files]
+                    removed_count = len(fresh_db) - len(cleaned_db)
+                    save_json(DB_PATH, cleaned_db)
+                    st.session_state.pop("ghost_items", None)
+                    st.success(f"{removed_count}件の幽霊データを削除しました。")
+                    st.rerun()
+
         st.write("ここでは登録されている生徒のパスワードの確認、変更、学習状況の確認が行えます。")
         
         users = load_json(USERS_PATH, {})
