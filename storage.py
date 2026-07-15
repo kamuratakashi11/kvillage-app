@@ -222,8 +222,27 @@ def upload_images_archive():
         return False, f"アップロードに失敗しました: {e}"
 
 
-def backup_pdf_images(filenames=None, skip_existing=False):
+def _safe_folder_name(name):
+    """大学名などをFirebase Storageのフォルダ名として使えるよう軽くサニタイズする。"""
+    name = (name or "").strip() or "未分類"
+    return name.replace("/", "_").replace("\\", "_")
+
+
+def _filename_to_university_map():
+    """db.json内の全問題について、image_file→university（無ければ"未分類"）の対応表を作る。"""
+    db_items = load_json(DB_PATH, [])
+    mapping = {}
+    for item in db_items:
+        img_file = item.get("image_file")
+        if img_file:
+            mapping[img_file] = _safe_folder_name(item.get("university"))
+    return mapping
+
+
+def backup_pdf_images(filenames=None, subfolder=None, skip_existing=False):
     """pdf_images/内の画像をFirebase Storageに1ファイル=1オブジェクトとして個別にアップロードする。
+    大学・模試ごとにFirebase Storage上でフォルダ分けされるよう、
+    pdf_images/<大学名>/<ファイル名> というオブジェクト名にする。
     模試PDFの自動取り込み等で新しく追加された問題画像は、upload_images_archive()（同梱の
     images_part*.zipのみが対象）ではバックアップされず、ローカルディスクにしか存在しない。
     Streamlit Cloudはコンテナ再起動でローカルディスクの内容がリセットされるため、新規取り込みの
@@ -234,6 +253,9 @@ def backup_pdf_images(filenames=None, skip_existing=False):
 
     filenames: バックアップ対象のファイル名リスト（pdf_images/直下）。Noneならフォルダ内の
                全ファイルを対象にする。
+    subfolder: 指定すれば、対象ファイル全てをこの大学名（フォルダ）の下にアップロードする
+               （新規取り込み直後の自動呼び出しで、その取り込みの大学名を渡す想定）。
+               省略時はdb.jsonのuniversityフィールドを参照し、ファイルごとに適切な大学名フォルダを判定する。
     skip_existing: Trueなら、バケットに同名のオブジェクトが既に存在するファイルはアップロードを
                    スキップする（「今すぐ全画像をバックアップする」ボタンでの重複アップロードを防ぐ）。
                    新規取り込み直後の自動呼び出しでは、対象は確実に新規ファイルなのでFalseのままでよい。
@@ -248,6 +270,10 @@ def backup_pdf_images(filenames=None, skip_existing=False):
     if filenames is None:
         filenames = os.listdir(IMG_DIR)
 
+    filename_to_university = None
+    if subfolder is None:
+        filename_to_university = _filename_to_university_map()
+
     uploaded_count = 0
     skipped_count = 0
     try:
@@ -256,7 +282,8 @@ def backup_pdf_images(filenames=None, skip_existing=False):
             if not os.path.isfile(file_path):
                 continue
 
-            blob = bucket.blob(IMAGES_ARCHIVE_BLOB_PREFIX + filename)
+            folder = subfolder if subfolder is not None else filename_to_university.get(filename, "未分類")
+            blob = bucket.blob(f"{IMAGES_ARCHIVE_BLOB_PREFIX}{_safe_folder_name(folder)}/{filename}")
             if skip_existing:
                 try:
                     if blob.exists():
@@ -270,6 +297,40 @@ def backup_pdf_images(filenames=None, skip_existing=False):
         return True, f"{uploaded_count}件の画像をバックアップしました（{skipped_count}件は既存のためスキップ）。"
     except Exception as e:
         return False, f"バックアップに失敗しました: {e}"
+
+
+def reorganize_flat_pdf_images():
+    """以前のバージョンでpdf_images/直下（大学フォルダ分けなし）にアップロードされてしまった
+    画像を、db.jsonのuniversityフィールドを見て pdf_images/<大学名>/<ファイル名> に
+    移動する（コピー後に元オブジェクトを削除）。1回限りの整理用。
+    戻り値: (成功したか, メッセージ)"""
+    bucket = get_storage_bucket()
+    if bucket is None:
+        return False, f"Firebase Storageバケットが取得できませんでした（{db_error}）。"
+
+    try:
+        blobs = list(bucket.list_blobs(prefix=IMAGES_ARCHIVE_BLOB_PREFIX))
+    except Exception as e:
+        return False, f"バケット内のファイル一覧取得に失敗しました: {e}"
+
+    filename_to_university = _filename_to_university_map()
+
+    moved_count = 0
+    try:
+        for blob in blobs:
+            rest = blob.name[len(IMAGES_ARCHIVE_BLOB_PREFIX):]
+            if not rest or "/" in rest or rest.endswith(".zip"):
+                continue  # すでにフォルダ分けされている or zipアーカイブは対象外
+
+            filename = rest
+            folder = filename_to_university.get(filename, "未分類")
+            new_name = f"{IMAGES_ARCHIVE_BLOB_PREFIX}{_safe_folder_name(folder)}/{filename}"
+            bucket.copy_blob(blob, bucket, new_name=new_name)
+            blob.delete()
+            moved_count += 1
+        return True, f"{moved_count}件の画像を大学ごとのフォルダに整理しました。"
+    except Exception as e:
+        return False, f"フォルダ整理に失敗しました: {e}"
 
 
 def ensure_pdf_images_extracted():

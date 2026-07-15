@@ -11,6 +11,7 @@ from storage import (
     BASE_DIR, DB_PATH, IMG_DIR, USERS_PATH, HISTORY_PATH,
     STUDENTS_DATA_PATH, db_error, load_json, save_json,
     ensure_pdf_images_extracted, upload_images_archive, backup_pdf_images,
+    reorganize_flat_pdf_images,
 )
 from student_state import (
     init_student_data, process_daily_login, get_level_info,
@@ -536,6 +537,18 @@ def main():
             else:
                 st.error(message2)
 
+        st.write(
+            "以前のバージョンで大学フォルダ分けせずにアップロードされてしまった画像がある場合、"
+            "下のボタンで大学ごとのフォルダに整理できます（1回実行すれば十分です）。"
+        )
+        if st.button("🗂️ 既存画像を大学ごとにフォルダ整理する"):
+            with st.spinner("整理中です…"):
+                ok3, message3 = reorganize_flat_pdf_images()
+            if ok3:
+                st.success(message3)
+            else:
+                st.error(message3)
+
         # --- 💡【追加】画像が見つからない「幽霊データ」のお掃除 ---
         st.markdown("---")
         st.subheader("🧹 画像が見つからない問題のお掃除")
@@ -817,7 +830,7 @@ def main():
                     st.session_state["ingest_preview_items"] = None
                     st.session_state["ingest_detected_configs"] = None
                     st.success("データベースに保存しました！")
-                    backup_ok, backup_msg = backup_pdf_images(new_filenames)
+                    backup_ok, backup_msg = backup_pdf_images(new_filenames, subfolder=university_name)
                     if not backup_ok:
                         st.warning(f"⚠️ 画像のクラウドバックアップに失敗しました（データベースへの保存自体は成功しています）: {backup_msg}")
                     st.rerun()
@@ -918,7 +931,7 @@ def main():
                     save_json(DB_PATH, ingest_db_p1)
                     st.session_state["ingest_p1_preview_items"] = None
                     st.success("データベースに保存しました！")
-                    backup_ok_p1, backup_msg_p1 = backup_pdf_images(new_filenames_p1)
+                    backup_ok_p1, backup_msg_p1 = backup_pdf_images(new_filenames_p1, subfolder=university_name_p1)
                     if not backup_ok_p1:
                         st.warning(f"⚠️ 画像のクラウドバックアップに失敗しました（データベースへの保存自体は成功しています）: {backup_msg_p1}")
                     st.rerun()
