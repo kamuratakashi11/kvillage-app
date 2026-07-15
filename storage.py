@@ -119,14 +119,18 @@ def update_student_field(path, student_id, *sub_keys, value):
 
     doc_name = os.path.basename(path).replace(".json", "")
     doc_ref = db_client.collection("kvillage_data").document(doc_name)
-    field_path = FieldPath("data", student_id, *sub_keys)
+    # update()に渡す辞書のキーはFieldPathオブジェクトそのものではなく、
+    # to_api_repr()で変換した文字列（例: "data.stu1.exp"）である必要がある。
+    # FieldPathオブジェクトを直接キーにすると、SDK内部で文字列として扱おうとして
+    # AttributeError: 'FieldPath' object has no attribute 'strip' になる。
+    field_path_str = FieldPath("data", student_id, *sub_keys).to_api_repr()
     try:
-        doc_ref.update({field_path: value})
+        doc_ref.update({field_path_str: value})
     except Exception:
         # ドキュメント自体がまだ存在しない場合はここで作成してから再試行する
         try:
             doc_ref.set({}, merge=True)
-            doc_ref.update({field_path: value})
+            doc_ref.update({field_path_str: value})
         except Exception as e:
             message = f"🚨 **DB保存エラー ({doc_name})**: {e}"
             st.session_state["_pending_storage_error"] = message
@@ -140,9 +144,9 @@ def delete_student_field(path, student_id, *sub_keys):
 
     doc_name = os.path.basename(path).replace(".json", "")
     doc_ref = db_client.collection("kvillage_data").document(doc_name)
-    field_path = FieldPath("data", student_id, *sub_keys)
+    field_path_str = FieldPath("data", student_id, *sub_keys).to_api_repr()
     try:
-        doc_ref.update({field_path: firestore.DELETE_FIELD})
+        doc_ref.update({field_path_str: firestore.DELETE_FIELD})
     except Exception:
         pass
 
@@ -168,7 +172,7 @@ def consume_student_resource(path, student_id, field_name, amount):
 
     doc_name = os.path.basename(path).replace(".json", "")
     doc_ref = db_client.collection("kvillage_data").document(doc_name)
-    field_path = FieldPath("data", student_id, field_name)
+    field_path_str = FieldPath("data", student_id, field_name).to_api_repr()
 
     @firestore.transactional
     def _consume(transaction):
@@ -177,7 +181,7 @@ def consume_student_resource(path, student_id, field_name, amount):
         current = doc_data.get("data", {}).get(student_id, {}).get(field_name, 0)
         if current < amount:
             return False
-        transaction.update(doc_ref, {field_path: current - amount})
+        transaction.update(doc_ref, {field_path_str: current - amount})
         return True
 
     try:
