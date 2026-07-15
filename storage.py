@@ -195,6 +195,7 @@ def consume_student_resource(path, student_id, field_name, amount):
 
 
 IMAGES_ARCHIVE_BLOB_PREFIX = "pdf_images/"
+CURRENT_IMAGES_BACKUP_BLOB = IMAGES_ARCHIVE_BLOB_PREFIX + "pdf_images_current_backup.zip"
 
 
 def upload_images_archive():
@@ -220,6 +221,39 @@ def upload_images_archive():
         return True, "アップロード完了: " + "、".join(uploaded)
     except Exception as e:
         return False, f"アップロードに失敗しました: {e}"
+
+
+def backup_pdf_images_dir():
+    """現在のpdf_images/フォルダの中身を丸ごとzip化してFirebase Storageにアップロードする。
+    模試PDFの自動取り込み等で新しく追加された問題画像は、upload_images_archive()（同梱の
+    images_part*.zipのみが対象）ではバックアップされず、ローカルディスクにしか存在しない。
+    Streamlit Cloudはコンテナ再起動でローカルディスクの内容がリセットされるため、新規取り込みの
+    保存が完了するたびにこの関数を呼び、最新のpdf_images/全体を退避しておく必要がある。
+    戻り値: (成功したか, メッセージ)"""
+    bucket = get_storage_bucket()
+    if bucket is None:
+        return False, f"Firebase Storageバケットが取得できませんでした（{db_error}）。"
+
+    if not os.path.exists(IMG_DIR):
+        return False, "pdf_images/ が見つかりませんでした。"
+
+    tmp_zip_path = os.path.join(BASE_DIR, "_pdf_images_current_backup.zip")
+    try:
+        with zipfile.ZipFile(tmp_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, _dirs, files in os.walk(IMG_DIR):
+                for filename in files:
+                    file_path = os.path.join(root, filename)
+                    arcname = os.path.join("pdf_images", os.path.relpath(file_path, IMG_DIR))
+                    zf.write(file_path, arcname=arcname)
+
+        blob = bucket.blob(CURRENT_IMAGES_BACKUP_BLOB)
+        blob.upload_from_filename(tmp_zip_path)
+        return True, "画像のバックアップが完了しました。"
+    except Exception as e:
+        return False, f"バックアップに失敗しました: {e}"
+    finally:
+        if os.path.exists(tmp_zip_path):
+            os.remove(tmp_zip_path)
 
 
 def ensure_pdf_images_extracted():

@@ -10,7 +10,7 @@ import re
 from storage import (
     BASE_DIR, DB_PATH, IMG_DIR, USERS_PATH, HISTORY_PATH,
     STUDENTS_DATA_PATH, db_error, load_json, save_json,
-    ensure_pdf_images_extracted, upload_images_archive,
+    ensure_pdf_images_extracted, upload_images_archive, backup_pdf_images_dir,
 )
 from student_state import (
     init_student_data, process_daily_login, get_level_info,
@@ -523,6 +523,19 @@ def main():
             else:
                 st.error(message)
 
+        st.write(
+            "上のボタンは最初に同梱されていた過去問画像だけが対象です。模試PDFの自動取り込み等で"
+            "**後から追加した画像**は、取り込み保存のたびに自動でバックアップされますが、"
+            "念のため今すぐ手動でバックアップしたい場合は下のボタンを押してください。"
+        )
+        if st.button("🔄 現在の全画像を今すぐバックアップする"):
+            with st.spinner("バックアップ中です…（画像量によっては数分かかることがあります）"):
+                ok2, message2 = backup_pdf_images_dir()
+            if ok2:
+                st.success(message2)
+            else:
+                st.error(message2)
+
         st.write("ここでは登録されている生徒のパスワードの確認、変更、学習状況の確認が行えます。")
         
         users = load_json(USERS_PATH, {})
@@ -756,6 +769,9 @@ def main():
                     st.session_state["ingest_preview_items"] = None
                     st.session_state["ingest_detected_configs"] = None
                     st.success("データベースに保存しました！")
+                    backup_ok, backup_msg = backup_pdf_images_dir()
+                    if not backup_ok:
+                        st.warning(f"⚠️ 画像のクラウドバックアップに失敗しました（データベースへの保存自体は成功しています）: {backup_msg}")
                     st.rerun()
 
         # --- 💡【追加】「1ページ＝1問」形式（大問見出しが無いPDF）の取り込み ---
@@ -850,6 +866,9 @@ def main():
                     save_json(DB_PATH, ingest_db_p1)
                     st.session_state["ingest_p1_preview_items"] = None
                     st.success("データベースに保存しました！")
+                    backup_ok_p1, backup_msg_p1 = backup_pdf_images_dir()
+                    if not backup_ok_p1:
+                        st.warning(f"⚠️ 画像のクラウドバックアップに失敗しました（データベースへの保存自体は成功しています）: {backup_msg_p1}")
                     st.rerun()
 
     elif page == "🏷️ 問題のタグ付け作業":
