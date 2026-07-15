@@ -10,6 +10,7 @@ import re
 from storage import (
     BASE_DIR, DB_PATH, IMG_DIR, USERS_PATH, HISTORY_PATH,
     STUDENTS_DATA_PATH, db_error, load_json, save_json,
+    ensure_pdf_images_extracted, upload_images_archive,
 )
 from student_state import (
     init_student_data, process_daily_login, get_level_info,
@@ -30,16 +31,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"  # 追加：サイドバーを最初から開いた状態に固定
 )
 
-import zipfile
-import glob
-
-# クラウド用：分割ZIPがあれば解凍して画像を復元
-if not os.path.exists(IMG_DIR):
-    zip_files = glob.glob(os.path.join(BASE_DIR, "images_part*.zip"))
-    if zip_files:
-        for zf in zip_files:
-            with zipfile.ZipFile(zf, 'r') as zip_ref:
-                zip_ref.extractall(BASE_DIR)
+# クラウド用：画像が無ければ、Firebase Storage（無ければ同梱の分割ZIP）から復元する
+ensure_pdf_images_extracted()
 
 # マスターパスワード（先生専用）・教室の合言葉は、ソースコードに直接書かず
 # Secretsで管理する（このリポジトリは公開設定のため、書くとGitHub上で誰でも読めてしまう）
@@ -478,7 +471,25 @@ def main():
             save_json("app_settings.json", app_settings)
             st.toast("システム設定を更新しました！", icon="✅")
             st.rerun()
-            
+
+        # --- 💡【追加】過去問画像のクラウド退避（著作権対策：Publicリポジトリからの除去準備） ---
+        st.markdown("---")
+        st.subheader("🔒 過去問画像のクラウド退避")
+        st.write(
+            "現在、過去問のスキャン画像（images_part\\*.zip）はこのアプリのリポジトリにそのまま含まれており、"
+            "リポジトリがPublic設定のため誰でも閲覧できてしまいます。下のボタンで画像をFirebase Storageの"
+            "非公開バケットにアップロードしておくと、以後はそちらから復元されるようになり、"
+            "リポジトリ側から画像を安全に削除できるようになります。**この操作は1回実行すれば十分です。**"
+        )
+        if st.button("🚀 画像をFirebase Storageへアップロードする", type="primary"):
+            with st.spinner("アップロード中です…（画像量によっては数分かかることがあります）"):
+                ok, message = upload_images_archive()
+            if ok:
+                st.success(message)
+                st.info("アップロードが完了したら、開発担当（Claude Code）に伝えてください。動作確認の上、リポジトリから画像を安全に削除します。")
+            else:
+                st.error(message)
+
         st.write("ここでは登録されている生徒のパスワードの確認、変更、学習状況の確認が行えます。")
         
         users = load_json(USERS_PATH, {})

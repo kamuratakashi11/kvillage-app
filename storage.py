@@ -1,9 +1,12 @@
 import os
 import json
+import glob
+import zipfile
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import firestore
+from firebase_admin import storage as fb_storage
 from google.cloud.firestore_v1.field_path import FieldPath
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,13 +36,27 @@ def init_firestore():
                 cert_dict["private_key"] = cert_dict["private_key"].replace("\\n", "\n")
 
             cred = credentials.Certificate(cert_dict)
-            firebase_admin.initialize_app(cred)
+            # 過去問画像のバックアップ保存先（Firebase Storage）。プロジェクトのデフォルト
+            # バケット名は通常 <project_id>.appspot.com だが、異なる場合はSecretsの
+            # FIREBASE_STORAGE_BUCKET で明示的に上書きできるようにしておく
+            storage_bucket = st.secrets.get("FIREBASE_STORAGE_BUCKET", f"{cert_dict['project_id']}.appspot.com")
+            firebase_admin.initialize_app(cred, {"storageBucket": storage_bucket})
         return firestore.client(), None
     except Exception as e:
         return None, f"Firestore初期化エラー: {e}"
 
 
 db_client, db_error = init_firestore()
+
+
+def get_storage_bucket():
+    """過去問画像のバックアップ用Firebase Storageバケットを返す。未設定・初期化失敗時はNone。"""
+    if db_client is None:
+        return None
+    try:
+        return fb_storage.bucket()
+    except Exception:
+        return None
 
 
 def _load_db_fallback(default_val):
@@ -171,3 +188,65 @@ def consume_student_resource(path, student_id, field_name, amount):
         st.session_state["_pending_storage_error"] = message
         st.error(message)
         return False
+
+
+IMAGES_ARCHIVE_BLOB_PREFIX = "pdf_images/"
+
+
+def upload_images_archive():
+    """リポジトリ同梱のimages_part*.zip（過去問の生スキャン画像）をそのままFirebase Storageの
+    バケットへアップロードする。このリポジトリはPublic設定のため、画像をgit管理から外して
+    ここに退避させるための1回限りの移行用関数（管理画面のボタンから呼ばれる想定）。
+    戻り値: (成功したか, メッセージ)"""
+    bucket = get_storage_bucket()
+    if bucket is None:
+        return False, f"Firebase Storageバケットが取得できませんでした（{db_error}）。FIREBASE_KEYの設定と、Firebase ConsoleでStorageが有効になっているか確認してください。"
+
+    zip_files = sorted(glob.glob(os.path.join(BASE_DIR, "images_part*.zip")))
+    if not zip_files:
+        return False, "images_part*.zip がこの環境に見つかりませんでした。"
+
+    uploaded = []
+    try:
+        for zf in zip_files:
+            blob_name = IMAGES_ARCHIVE_BLOB_PREFIX + os.path.basename(zf)
+            blob = bucket.blob(blob_name)
+            blob.upload_from_filename(zf)
+            uploaded.append(f"{os.path.basename(zf)}（{os.path.getsize(zf)/1024/1024:.1f}MB）")
+        return True, "アップロード完了: " + "、".join(uploaded)
+    except Exception as e:
+        return False, f"アップロードに失敗しました: {e}"
+
+
+def ensure_pdf_images_extracted():
+    """pdf_images/ が無ければ、まずFirebase Storageに退避済みのバックアップから復元を試みる。
+    バケットに無ければ、リポジトリ同梱のimages_part*.zip（移行完了後は削除される想定の
+    互換フォールバック）から復元する。"""
+    if os.path.exists(IMG_DIR):
+        return
+
+    bucket = get_storage_bucket()
+    if bucket is not None:
+        try:
+            blobs = list(bucket.list_blobs(prefix=IMAGES_ARCHIVE_BLOB_PREFIX))
+        except Exception as e:
+            blobs = []
+            st.session_state["_pending_storage_error"] = f"🚨 **画像復元エラー**: Firebase Storageの一覧取得に失敗しました（{e}）。同梱の画像データがあればそちらを使用します。"
+
+        if blobs:
+            try:
+                for blob in blobs:
+                    tmp_zip = os.path.join(BASE_DIR, "_" + os.path.basename(blob.name))
+                    blob.download_to_filename(tmp_zip)
+                    with zipfile.ZipFile(tmp_zip, "r") as zip_ref:
+                        zip_ref.extractall(BASE_DIR)
+                    os.remove(tmp_zip)
+                return
+            except Exception as e:
+                st.session_state["_pending_storage_error"] = f"🚨 **画像復元エラー**: Firebase Storageからのダウンロードに失敗しました（{e}）。同梱の画像データがあればそちらを使用します。"
+
+    # フォールバック: リポジトリ同梱のzip（Firebase Storageへの移行・確認が済んだらgit履歴から削除する想定）
+    zip_files = glob.glob(os.path.join(BASE_DIR, "images_part*.zip"))
+    for zf in zip_files:
+        with zipfile.ZipFile(zf, "r") as zip_ref:
+            zip_ref.extractall(BASE_DIR)
