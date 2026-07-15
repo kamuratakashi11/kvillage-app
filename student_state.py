@@ -1,5 +1,8 @@
 from datetime import datetime
-from storage import load_json, save_json, STUDENTS_DATA_PATH, USERS_PATH
+from storage import (
+    load_json, save_json, update_student_field, increment_student_field,
+    consume_student_resource, STUDENTS_DATA_PATH, USERS_PATH,
+)
 
 
 def init_student_data(student_id, name):
@@ -82,34 +85,28 @@ def update_student_exp(student_id, exp_gain):
     if student_id not in data:
         return False
 
-    student = data[student_id]
-    old_level, _, _ = get_level_info(student.get("exp", 0))
+    old_level, _, _ = get_level_info(data[student_id].get("exp", 0))
 
-    student["exp"] = student.get("exp", 0) + exp_gain
+    # expはFirestoreのアトミックIncrementで加算する。load→加算→save_jsonの
+    # 丸ごと書き戻し方式だと、他の生徒の保存とほぼ同時に行われた際に
+    # 加算分がまるごと消えてしまうことがあるため。
+    increment_student_field(STUDENTS_DATA_PATH, student_id, "exp", exp_gain)
 
-    new_level, _, _ = get_level_info(student["exp"])
-    leveled_up = False
+    fallback_exp = data[student_id].get("exp", 0) + exp_gain
+    refreshed_exp = load_json(STUDENTS_DATA_PATH, {}).get(student_id, {}).get("exp", fallback_exp)
+    new_level, _, _ = get_level_info(refreshed_exp)
+    leveled_up = new_level > old_level
 
-    if new_level > old_level:
-        student["level"] = new_level
-        leveled_up = True
+    if leveled_up:
+        update_student_field(STUDENTS_DATA_PATH, student_id, "level", value=new_level)
 
-    data[student_id] = student
-    save_json(STUDENTS_DATA_PATH, data)
     return leveled_up
 
 
 def consume_tickets(student_id, amount):
     if student_id == "master":
         return True
-    data = load_json(STUDENTS_DATA_PATH, {})
-    if student_id not in data:
-        return False
-
-    student = data[student_id]
-    if student.get("tickets", 0) >= amount:
-        student["tickets"] -= amount
-        data[student_id] = student
-        save_json(STUDENTS_DATA_PATH, data)
-        return True
-    return False
+    # 「残高確認→減算→保存」を1つのFirestoreトランザクションにまとめることで、
+    # ほぼ同時に来た複数のチケット消費リクエストが両方とも「足りている」と
+    # 誤判定して二重に消費してしまう競合を避ける。
+    return consume_student_resource(STUDENTS_DATA_PATH, student_id, "tickets", amount)

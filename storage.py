@@ -128,3 +128,46 @@ def delete_student_field(path, student_id, *sub_keys):
         doc_ref.update({field_path: firestore.DELETE_FIELD})
     except Exception:
         pass
+
+
+def increment_student_field(path, student_id, field_name, delta):
+    """指定フィールド（数値）にdeltaを加算する。Firestoreのアトミックな
+    Incrementを使うため、複数の保存がほぼ同時に行われても加算分が
+    互いに上書きされて消えることがない（例: EXP加算の取りこぼし防止）。"""
+    update_student_field(path, student_id, field_name, value=firestore.Increment(delta))
+
+
+def consume_student_resource(path, student_id, field_name, amount):
+    """指定フィールド（チケットのような残高数値）がamount以上あれば、
+    Firestoreのトランザクションで「残高チェック」と「アトミックな減算」を
+    1つの不可分な操作として行う。read-modify-write（読み込み→減算→
+    書き戻し）だと、ほぼ同時に来た複数のリクエストがどちらも「まだ残高が
+    足りる」という古い状態を見て両方通ってしまい、合計の消費量が実際の
+    残高を超えてしまうことがある。
+    戻り値: 消費できればTrue、残高不足（またはFirestore未初期化）ならFalse。"""
+    if db_client is None:
+        st.session_state["_pending_storage_error"] = f"🚨 **DB保存エラー**: Firestoreが初期化されていません（{db_error}）"
+        return False
+
+    doc_name = os.path.basename(path).replace(".json", "")
+    doc_ref = db_client.collection("kvillage_data").document(doc_name)
+    field_path = FieldPath("data", student_id, field_name)
+
+    @firestore.transactional
+    def _consume(transaction):
+        snapshot = doc_ref.get(transaction=transaction)
+        doc_data = snapshot.to_dict() or {}
+        current = doc_data.get("data", {}).get(student_id, {}).get(field_name, 0)
+        if current < amount:
+            return False
+        transaction.update(doc_ref, {field_path: current - amount})
+        return True
+
+    try:
+        transaction = db_client.transaction()
+        return _consume(transaction)
+    except Exception as e:
+        message = f"🚨 **DB保存エラー ({doc_name})**: {e}"
+        st.session_state["_pending_storage_error"] = message
+        st.error(message)
+        return False
