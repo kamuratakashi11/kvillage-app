@@ -32,10 +32,53 @@ def _escape_stray_backslashes(text):
     return "".join(out)
 
 
+def _escape_control_chars_in_strings(text):
+    """複数行の小論文本文・添削文など、長い自由記述をJSON文字列として生成させると、
+    改行やタブが `\\n` `\\t` としてエスケープされず、生の制御文字のまま出力されることがある。
+    JSON文字列リテラルの中に生の制御文字が入っていると "Invalid control character" で
+    解析が失敗するため、文字列リテラルの内側にいる間だけ制御文字を正しいエスケープに変換する。"""
+    out = []
+    in_string = False
+    escape_next = False
+    for ch in text:
+        if in_string:
+            if escape_next:
+                out.append(ch)
+                escape_next = False
+                continue
+            if ch == '\\':
+                out.append(ch)
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = False
+                out.append(ch)
+                continue
+            if ch == '\n':
+                out.append('\\n')
+                continue
+            if ch == '\r':
+                out.append('\\r')
+                continue
+            if ch == '\t':
+                out.append('\\t')
+                continue
+            if ord(ch) < 0x20:
+                out.append(f'\\u{ord(ch):04x}')
+                continue
+            out.append(ch)
+        else:
+            if ch == '"':
+                in_string = True
+            out.append(ch)
+    return "".join(out)
+
+
 def parse_json_lenient(text):
     """Geminiの応答をJSONとして解釈する。response_mime_type=application/jsonを指定していても、
     モデルが末尾に余分な閉じかっこを付け足したり、数式中のバックスラッシュ（\\leや\\sqrtなど）を
-    エスケープせずに出力したりすることが稀にあるため、これらを許容してから解釈する。"""
+    エスケープせずに出力したり、複数行の自由記述の中に生の改行を混ぜてしまったりすることが
+    稀にあるため、これらを許容してから解釈する。"""
     text = (text or "").strip()
     if not text:
         raise json.JSONDecodeError("空の応答です", text, 0)
@@ -49,7 +92,13 @@ def parse_json_lenient(text):
     except json.JSONDecodeError:
         pass
     sanitized = _escape_stray_backslashes(text)
-    obj, _ = json.JSONDecoder().raw_decode(sanitized)
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(sanitized)
+        return obj
+    except json.JSONDecodeError:
+        pass
+    sanitized2 = _escape_control_chars_in_strings(sanitized)
+    obj, _ = json.JSONDecoder().raw_decode(sanitized2)
     return obj
 
 @st.cache_data(ttl=3600, show_spinner=False)
