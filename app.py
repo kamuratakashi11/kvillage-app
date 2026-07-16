@@ -467,6 +467,14 @@ def main():
 
     page = st.sidebar.radio("メニュー", menu_options, index=default_menu_index)
 
+    # サイドバーで「数学冒険マップ」以外のページに切り替えた場合、マップのフィールドリンク由来の
+    # クエリパラメータ（page=rpg_battle・field・dungeon）が残ったままだと、次のページ選択を
+    # 無視してバトル画面が表示され続けてしまうため、ここで消しておく
+    if page != "🗺️ 数学冒険マップ" and st.query_params.get("page") == "rpg_battle":
+        for key in ("page", "field", "dungeon"):
+            if key in st.query_params:
+                del st.query_params[key]
+
     # ログアウトボタン
     if st.sidebar.button("ログアウト"):
         session_store.delete_session(st.query_params.get("token"))
